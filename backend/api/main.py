@@ -1,0 +1,278 @@
+"""
+Edgekit FastAPI service.
+
+Endpoints:
+  GET  /strategies                  → list all strategy templates + their param schemas
+  GET  /strategies/{strategy_id}    → one strategy (404 if unknown)
+  POST /upload-csv                  → upload an OHLCV CSV, returns a data_id
+  POST /backtest                    → run a backtest, returns metrics + curves
+  GET  /healthz                     → liveness
+
+Run locally:
+  uvicorn backend.api.main:app --reload --port 8000
+"""
+from __future__ import annotations
+from typing import Optional
+import io
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import traceback
+from sqlalchemy.orm import Session
+import pandas as pd
+
+from backend.engine.core import (
+    load_csv, load_mt5, simulate, compute_metrics,
+    infer_pip_from_df, validate_ohlcv,
+)
+from backend.engine.strategies import REGISTRY, get as get_strategy, list_all
+from backend.api import store
+from backend.api.schemas import (
+    StrategySummary, ParamSpecOut,
+    BacktestRequest, BacktestResponse, BacktestMetrics,
+    CSVUploadResponse,
+)
+from backend.api.auth    import current_user
+from backend.api.limits  import enforce_backtest_quota, require_csv_upload
+from backend.api.billing import router as billing_router
+from backend.api.routes_user import router as user_router
+from backend.api.preview import router as preview_router
+from backend.api.routes_graph    import router as graph_router
+from backend.api.routes_graph_v2 import router as graph_v2_router
+from backend.db import get_db, init_db, BacktestRun, User
+
+app = FastAPI(
+    title="Edgekit API",
+    version="0.1.0",
+    description="No-code strategy backtesting platform — backend.",
+)
+
+# CORS — open in dev, lock down in prod via env
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize DB tables on startup
+@app.on_event("startup")
+def _startup():
+    init_db()
+
+# Mount sub-routers
+app.include_router(billing_router)
+app.include_router(user_router)
+app.include_router(preview_router)
+app.include_router(graph_router)
+app.include_router(graph_v2_router)
+
+
+# ─── Global exception handler ────────────────────────────────────────────────
+# When an unhandled exception escapes a route, FastAPI's default 500 response
+# bypasses CORSMiddleware → browser sees no Allow-Origin header and reports a
+# misleading "CORS policy" error. Catch every uncaught exception here and
+# return JSONResponse so CORS middleware applies and the real error reaches
+# the frontend.
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception):
+    traceback.print_exc()
+    origin = request.headers.get("origin", "*")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+        headers={
+            "Access-Control-Allow-Origin":      origin,
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
+
+
+# ─── Health ──────────────────────────────────────────────────────────────────
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "strategies": len(REGISTRY), "store": store.stats()}
+
+
+# ─── Strategies ──────────────────────────────────────────────────────────────
+@app.get("/strategies", response_model=list[StrategySummary])
+def list_strategies():
+    out: list[StrategySummary] = []
+    for sid, cls in REGISTRY.items():
+        out.append(StrategySummary(
+            id          = sid,
+            name        = cls.name,
+            description = cls.description,
+            timeframes  = list(cls.timeframes),
+            instruments = list(cls.instruments),
+            params      = [ParamSpecOut(**p.__dict__) for p in cls.param_schema],
+        ))
+    return out
+
+
+@app.get("/strategies/{strategy_id}", response_model=StrategySummary)
+def get_strategy_detail(strategy_id: str):
+    try:
+        cls = get_strategy(strategy_id)
+    except KeyError:
+        raise HTTPException(404, f"Unknown strategy: {strategy_id}")
+    return StrategySummary(
+        id          = strategy_id,
+        name        = cls.name,
+        description = cls.description,
+        timeframes  = list(cls.timeframes),
+        instruments = list(cls.instruments),
+        params      = [ParamSpecOut(**p.__dict__) for p in cls.param_schema],
+    )
+
+
+# ─── CSV upload (Trader+ gated in prod; open in dev) ───────────────────────
+@app.post("/upload-csv", response_model=CSVUploadResponse)
+async def upload_csv(
+    file:   UploadFile = File(...),
+    symbol: Optional[str] = Form(None),
+):
+    raw = await file.read()
+    try:
+        df = load_csv(raw)
+    except Exception as e:
+        raise HTTPException(400, f"CSV parse failed: {e}")
+    issues   = validate_ohlcv(df)
+    pip      = infer_pip_from_df(df, symbol)
+    data_id  = store.put(df)
+    store.evict_oldest()
+    return CSVUploadResponse(
+        data_id   = data_id,
+        bars      = len(df),
+        start     = df["time"].iloc[0].isoformat(),
+        end       = df["time"].iloc[-1].isoformat(),
+        columns   = list(df.columns),
+        issues    = issues,
+        pip_guess = pip,
+    )
+
+
+# ─── Backtest ────────────────────────────────────────────────────────────────
+@app.post("/backtest", response_model=BacktestResponse)
+def run_backtest(
+    req:  BacktestRequest,
+    db:   Session = Depends(get_db),
+    # Soft-auth: if a user identifies themselves we enforce quota + log the run.
+    # Anonymous requests still work in dev for quick iteration.
+    x_dev_user:    Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    # Best-effort identify the caller (don't fail if anonymous)
+    user = None
+    try:
+        from backend.api.auth import current_user as _cu
+        user = _cu(db=db, x_dev_user=x_dev_user, authorization=authorization)
+        # Now enforce quota
+        from backend.api.limits import enforce_backtest_quota as _eq
+        _eq(user=user, db=db)
+    except HTTPException as e:
+        if e.status_code in (401,):
+            user = None    # anonymous — allowed in dev
+        else:
+            raise
+    # 1) Resolve data
+    if req.data_source == "mt5":
+        try:
+            df = load_mt5(req.symbol, req.timeframe, req.n_bars)
+        except Exception as e:
+            raise HTTPException(400, f"MT5 fetch failed: {e}")
+    elif req.data_source == "upload":
+        if not req.csv_data_id:
+            raise HTTPException(400, "csv_data_id required when data_source = 'upload'")
+        df = store.get(req.csv_data_id)
+        if df is None:
+            raise HTTPException(404, f"data_id {req.csv_data_id} not found (may have evicted)")
+    else:
+        raise HTTPException(400, f"Unsupported data_source: {req.data_source}")
+
+    # 2) Resolve pip + params
+    pip = infer_pip_from_df(df, req.symbol)
+    try:
+        Strat = get_strategy(req.strategy_id)
+    except KeyError:
+        raise HTTPException(404, f"Unknown strategy: {req.strategy_id}")
+    strat = Strat()
+
+    params = {**strat.default_params(), **req.params, "pip": pip}
+    tps    = [(t.r, t.qty) for t in req.tps] if req.tps else None
+    if tps:
+        params["tps"] = tps
+
+    # 3) Detect + simulate
+    setups = strat.detect(df, params)
+    tdf    = simulate(
+        df, setups,
+        # ── New simple management model ─────────────────────────────────
+        target_r         = req.target_r,
+        target_close_pct = req.target_close_pct,
+        trail_mode       = req.trail_mode,
+        trail_start      = req.trail_start,
+        trail_params     = req.trail_params,
+        # ── Legacy ladder (still works if caller passes tps) ────────────
+        trail_enabled  = req.trail_enabled,
+        trail_from_idx = req.trail_from_idx,
+        trail_buf_pips = req.trail_buf_pips,
+        # ── Order mgmt ──────────────────────────────────────────────────
+        max_concurrent = req.max_concurrent,
+        order_expiry   = req.order_expiry,
+        session_hours  = req.session_hours,
+        pip            = pip,
+    )
+    m = compute_metrics(tdf,
+                       initial_equity = req.initial_equity,
+                       risk_pct       = req.risk_pct,
+                       max_risk_usd   = req.max_risk_usd)
+    if m is None:
+        raise HTTPException(422, "No resolved trades — loosen the parameters.")
+
+    # Persist the run for logged-in users
+    if user is not None:
+        try:
+            run_row = BacktestRun(
+                user_id         = user.id,
+                strategy_id     = req.strategy_id,
+                params_snapshot = {**params, "tps": tps or params.get("tps") or []},
+                metrics         = {
+                    "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
+                    "total_r": m["total_r"], "profit_factor":
+                        (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
+                    "max_dd": m["max_dd"], "final_equity": m["final_equity"],
+                },
+                symbol    = req.symbol,
+                timeframe = req.timeframe,
+                bars      = len(df),
+            )
+            db.add(run_row); db.commit()
+        except Exception:
+            db.rollback()    # don't fail the request just because logging broke
+
+    return BacktestResponse(
+        strategy_id  = req.strategy_id,
+        data_range   = (df["time"].iloc[0].isoformat(), df["time"].iloc[-1].isoformat()),
+        bars         = len(df),
+        pip          = pip,
+        metrics      = BacktestMetrics(
+            trades        = m["trades"],
+            wr            = m["wr"],
+            ev            = m["ev"],
+            total_r       = m["total_r"],
+            profit_factor = (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
+            max_dd        = m["max_dd"],
+            avg_win       = m["avg_win"],
+            avg_loss      = m["avg_loss"],
+            final_equity  = m["final_equity"],
+            n_setups      = m["n_setups"],
+            n_unresolved  = m["n_unresolved"],
+            exit_counts   = {str(k): int(v) for k, v in m["exit_counts"].items()},
+        ),
+        equity_curve = m["curve"].tolist(),
+        pnl_series   = m["pnl"].tolist(),
+        issues       = validate_ohlcv(df),
+    )

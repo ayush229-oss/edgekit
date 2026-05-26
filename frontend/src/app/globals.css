@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Geist Mono for numerics — financial data deserves a real monospaced font.
+   Loaded from Vercel's CDN to avoid bundling. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://cdn.jsdelivr.net/npm/geist-font@1.5.0/dist/fonts/geist-mono/Geist-Mono-Regular.woff2");
+
+:root {
+  --paper:        #FAFAFA;
+  --surface:      #FFFFFF;
+  --surface2:     #F5F5F7;
+  --ink:          #0A0A0A;
+  --ink2:         #1D1D1F;
+  --muted:        #86868B;
+  --border:       #E5E5E7;
+  --money:        #0B6E4F;
+  --up:           #16A34A;
+  --down:         #DC2626;
+  --highlight:    #FEF3C7;
+
+  /* Legacy aliases — still referenced in old components */
+  --cream:        var(--paper);
+  --cream2:       var(--surface);
+  --cream3:       var(--surface2);
+}
+
+html, body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Inter, "SF Pro Text", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";   /* Inter stylistic alternates */
+}
+
+/* Apple-style focus rings */
+:focus-visible {
+  outline: 2px solid var(--money);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Selection — match the brand */
+::selection {
+  background: rgba(11, 110, 79, 0.18);
+  color: var(--ink);
+}
+
+/* Custom scrollbar — minimal */
+::-webkit-scrollbar          { width: 10px; height: 10px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: rgba(0,0,0,0.12); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.22); border: 2px solid transparent; background-clip: padding-box; }
+
+/* Premium UI primitives — reusable across pages */
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-full bg-money text-white text-sm font-medium
+           hover:bg-moneyDark transition-colors shadow-soft;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surface2 text-ink text-sm font-medium
+           hover:bg-border transition-colors;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-muted hover:text-ink hover:bg-surface2
+           text-sm transition-colors;
+  }
+  .card {
+    @apply bg-surface border border-border rounded-2xl shadow-soft;
+  }
+  .card-hover {
+    @apply bg-surface border border-border rounded-2xl shadow-soft hover:shadow-lift hover:-translate-y-0.5
+           transition-all duration-200;
+  }
+  .mono { font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-feature-settings: "tnum"; }
+  .num  { font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+}
+
+/* Subtle hero gradient — for landing only */
+.hero-grad {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(11,110,79,0.08), transparent 70%),
+    linear-gradient(180deg, #FAFAFA 0%, #FAFAFA 60%, #F5F5F7 100%);
+}

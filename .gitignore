@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Edgekit
+*.log
+.env
+.env.local
+data/cache/
+*.pkl
+*.csv.bak
+
+# Build
+dist/
+build/
+node_modules/
+.next/
+out/

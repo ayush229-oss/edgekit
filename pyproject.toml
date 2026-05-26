@@ -1,0 +1,29 @@
+[project]
+name        = "edgekit"
+version     = "0.1.0"
+description = "No-code strategy backtesting platform for any market."
+requires-python = ">=3.10"
+
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "MetaTrader5; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+]
+dev = [
+    "pytest>=8.0",
+    "black>=24.0",
+    "ruff>=0.3",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 100
