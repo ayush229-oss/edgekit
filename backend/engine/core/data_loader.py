@@ -128,11 +128,18 @@ def validate_ohlcv(df: pd.DataFrame) -> dict:
 
 
 def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
-    """Fetch bars from a connected MT5 terminal."""
+    """Fetch bars from a connected MT5 terminal (Windows only).
+    On Linux / non-Windows systems, falls back to yfinance automatically.
+    """
+    import sys
+    if sys.platform != "win32":
+        return _load_yfinance(symbol, timeframe, n_bars)
+
     try:
         import MetaTrader5 as mt5
-    except ImportError as e:
-        raise RuntimeError("MetaTrader5 package not installed. `pip install MetaTrader5`.") from e
+    except ImportError:
+        # MT5 package missing even on Windows — try yfinance
+        return _load_yfinance(symbol, timeframe, n_bars)
 
     tf_map = {
         "M1":  mt5.TIMEFRAME_M1,
@@ -158,6 +165,95 @@ def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
     df = df.rename(columns={"open": "O", "high": "H", "low": "L", "close": "C",
                             "tick_volume": "V"})
     return df[["time", "O", "H", "L", "C", "V"]]
+
+
+# ─── Symbol mapping: Edgekit → Yahoo Finance ticker ─────────────────────────
+_YF_SYMBOL_MAP: dict[str, str] = {
+    # Forex (via FX=X suffix)
+    "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
+    "AUDUSD": "AUDUSD=X", "USDCAD": "USDCAD=X", "USDCHF": "USDCHF=X",
+    "NZDUSD": "NZDUSD=X", "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X",
+    "GBPJPY": "GBPJPY=X",
+    # Commodities
+    "XAUUSD": "GC=F", "GOLD": "GC=F",
+    "XAGUSD": "SI=F", "SILVER": "SI=F",
+    "USOIL":  "CL=F", "WTI": "CL=F", "BRENT": "BZ=F",
+    # Crypto
+    "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD",
+    "BNBUSD": "BNB-USD", "SOLUSD": "SOL-USD",
+    # Indices
+    "US500":  "^GSPC", "SPX": "^GSPC",
+    "US100":  "^NDX",  "NDX": "^NDX",
+    "US30":   "^DJI",  "DJI": "^DJI",
+}
+
+_YF_INTERVAL_MAP: dict[str, str] = {
+    "M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m",
+    "H1": "1h", "H4": "4h", "D1":  "1d",
+}
+
+# How many calendar days to fetch per timeframe to get ~n_bars bars
+_YF_PERIOD_DAYS: dict[str, float] = {
+    "M1": 7, "M5": 60, "M15": 60, "M30": 120,
+    "H1": 730, "H4": 730, "D1": 3650,
+}
+
+
+def _load_yfinance(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
+    """Fetch OHLCV from Yahoo Finance. Used as MT5 fallback on Linux/VPS."""
+    try:
+        import yfinance as yf
+    except ImportError as e:
+        raise RuntimeError(
+            "Neither MetaTrader5 nor yfinance is available. "
+            "Install yfinance: pip install yfinance"
+        ) from e
+
+    interval = _YF_INTERVAL_MAP.get(timeframe)
+    if interval is None:
+        raise ValueError(f"Unsupported timeframe for yfinance: {timeframe}")
+
+    ticker = _YF_SYMBOL_MAP.get(symbol.upper(), symbol)
+    days   = _YF_PERIOD_DAYS.get(timeframe, 365)
+
+    import datetime
+    end   = datetime.datetime.utcnow()
+    start = end - datetime.timedelta(days=days)
+
+    raw = yf.download(
+        ticker,
+        start=start.strftime("%Y-%m-%d"),
+        end=end.strftime("%Y-%m-%d"),
+        interval=interval,
+        progress=False,
+        auto_adjust=True,
+    )
+
+    if raw is None or raw.empty:
+        raise RuntimeError(
+            f"yfinance returned no data for {symbol} ({ticker}) {timeframe}. "
+            "Check the symbol name or try a higher timeframe."
+        )
+
+    # yfinance returns a MultiIndex or flat columns depending on version
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+
+    raw = raw.rename(columns={
+        "Open": "O", "High": "H", "Low": "L", "Close": "C", "Volume": "V",
+    })
+    raw.index.name = "time"
+    raw = raw.reset_index()
+    raw["time"] = pd.to_datetime(raw["time"], utc=True).dt.tz_localize(None)
+
+    keep = [c for c in ("time", "O", "H", "L", "C", "V") if c in raw.columns]
+    df = raw[keep].dropna(subset=["O", "H", "L", "C"]).reset_index(drop=True)
+
+    # Return last n_bars rows
+    if len(df) > n_bars:
+        df = df.iloc[-n_bars:].reset_index(drop=True)
+
+    return df
 
 
 def pip_size(symbol: str | None = None, price_sample: float | None = None) -> float:
