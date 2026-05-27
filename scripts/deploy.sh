@@ -41,9 +41,11 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 # ── 4. Python venv + dependencies ────────────────────────────
 echo "▶ Creating Python virtual environment..."
 python3 -m venv "$APP_DIR/.venv"
-"$APP_DIR/.venv/bin/pip" install --upgrade pip --quiet
-"$APP_DIR/.venv/bin/pip" install -e "$APP_DIR[api]" --quiet
-"$APP_DIR/.venv/bin/pip" install anthropic openai yfinance --quiet
+"$APP_DIR/.venv/bin/pip" install --upgrade pip setuptools --quiet
+"$APP_DIR/.venv/bin/pip" install \
+    fastapi "uvicorn[standard]" pydantic sqlalchemy \
+    anthropic openai "google-genai>=1.0" yfinance httpx \
+    pandas numpy --quiet
 
 echo "▶ Packages installed:"
 "$APP_DIR/.venv/bin/pip" show fastapi uvicorn anthropic openai yfinance \
