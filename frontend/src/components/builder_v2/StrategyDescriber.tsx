@@ -13,7 +13,7 @@
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { v2GetTemplate, v2FromText, hasUserGeminiKey, type V2Graph } from "@/lib/api";
+import { v2GetTemplate, v2FromText, hasUserAIKey, type V2Graph } from "@/lib/api";
 
 
 // Each template has a list of keywords + the bullet explanation that runs
@@ -180,7 +180,7 @@ export function StrategyDescriber({
   const [hasKey, setHasKey]   = useState(false);
 
   useEffect(() => {
-    if (open) setHasKey(hasUserGeminiKey());
+    if (open) setHasKey(hasUserAIKey());
   }, [open]);
 
   if (!open) return null;
@@ -250,11 +250,11 @@ export function StrategyDescriber({
           <div className="mt-3 rounded-md bg-amber/10 border border-amber/40 p-3 text-xs">
             <div className="font-semibold text-amber-900 mb-1">⚠ AI not configured — limited mode</div>
             <p className="text-muted leading-snug">
-              Without a Gemini API key, only descriptions matching one of the 7 starter templates will work
+              Without an AI key, only descriptions matching one of the 7 starter templates will work
               (Donchian, EMA cross, Ichimoku, SMC, RSI+Bollinger, Turtle, Livermore). Novel ideas will fail.
             </p>
             <p className="text-muted leading-snug mt-1.5">
-              Add a free key under{" "}
+              Add your key (Gemini, Claude, OpenAI, Groq…) under{" "}
               <Link href="/resources" className="text-money underline font-medium" onClick={onClose}>
                 Resources → AI Model
               </Link>

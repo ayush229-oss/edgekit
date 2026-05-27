@@ -429,71 +429,82 @@ Return ONLY a JSON object matching the V2Graph schema. No prose, no markdown fen
 @router.post("/from-text")
 def from_text(
     req: FromTextRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),   # legacy
+    x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
 ) -> Dict[str, Any]:
     """
-    Convert a plain-English strategy description into a V2 graph using Gemini.
-    Returns a V2Graph JSON that the canvas can render directly.
+    Convert a plain-English strategy description into a V2 graph using the
+    user's chosen AI provider (Gemini, Anthropic, OpenAI, Groq, Mistral).
 
-    API key priority: request header (user's own key from Resources page) →
-    server env var (admin default).
+    Key priority: X-AI-Key header → legacy X-Gemini-Key → server env var.
     """
     try:
-        return _from_text_impl(req, x_gemini_key)
+        return _from_text_impl(req, x_gemini_key, x_ai_key, x_ai_provider)
     except HTTPException:
         raise
     except Exception as e:
-        # Catch-all: never let a bare exception leak as "Internal Server Error".
-        # The frontend reads `detail` and shows it to the user — make it useful.
         import traceback
         traceback.print_exc()
         raise HTTPException(500, f"AI generation crashed: {type(e).__name__}: {str(e)[:300]}")
 
 
-def _from_text_impl(
-    req: "FromTextRequest",
-    x_gemini_key: Optional[str],
-) -> Dict[str, Any]:
-    import os, json as _json
-    api_key = (x_gemini_key or os.environ.get("GEMINI_API_KEY", "")).strip()
-    if not api_key:
-        raise HTTPException(
-            503,
-            "AI generation needs a Gemini API key. Add yours under Resources → AI Model, "
-            "or set GEMINI_API_KEY on the server."
-        )
+# ── Per-provider env var fallbacks ──────────────────────────────────────────
+_PROVIDER_ENV: Dict[str, str] = {
+    "gemini":    "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "groq":      "GROQ_API_KEY",
+    "mistral":   "MISTRAL_API_KEY",
+}
 
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        raise HTTPException(503, "AI generation disabled: google-genai SDK not installed.")
+# Default model per provider
+_PROVIDER_MODEL: Dict[str, str] = {
+    "gemini":    "gemini-2.5-flash",
+    "anthropic": "claude-sonnet-4-5",
+    "openai":    "gpt-4o-mini",
+    "groq":      "llama-3.3-70b-versatile",
+    "mistral":   "mistral-small-latest",
+}
 
-    # Compact catalog — only the bits the model needs to produce valid graphs
+# OpenAI-compatible base URLs for non-OpenAI providers
+_OPENAI_COMPAT_BASE: Dict[str, str] = {
+    "groq":    "https://api.groq.com/openai/v1",
+    "mistral": "https://api.mistral.ai/v1",
+}
+
+
+def _build_catalog_and_prompts(req: "FromTextRequest") -> tuple:
+    import json as _json
     catalog = []
     for spec in NODE_LIBRARY.values():
         d = spec.to_dict()
         catalog.append({
-            "type":     d["type"],
-            "lane":     d["lane"],
-            "label":    d["label"],
-            "desc":     d["description"],
-            "inputs":   [{"name": p["name"], "type": p["type"]} for p in d["inputs"]],
-            "outputs":  [{"name": p["name"], "type": p["type"]} for p in d["outputs"]],
-            "params":   [
-                {"key": p["key"], "type": p["type"], "default": p["default"]}
-                for p in d["params"]
-            ],
+            "type":    d["type"],
+            "lane":    d["lane"],
+            "label":   d["label"],
+            "desc":    d["description"],
+            "inputs":  [{"name": p["name"], "type": p["type"]} for p in d["inputs"]],
+            "outputs": [{"name": p["name"], "type": p["type"]} for p in d["outputs"]],
+            "params":  [{"key": p["key"], "type": p["type"], "default": p["default"]}
+                        for p in d["params"]],
         })
-
     system_prompt = _AI_SYSTEM_TEMPLATE.format(catalog=_json.dumps(catalog, separators=(",", ":")))
     user_prompt   = (
         f"Symbol: {req.symbol}\nTimeframe: {req.timeframe}\n\n"
         f"Strategy description:\n{req.description}\n\n"
         f"Generate the V2 graph JSON."
     )
+    return system_prompt, user_prompt
 
-    # Force the response shape so the model can't return a malformed graph
+
+def _call_gemini(api_key: str, system_prompt: str, user_prompt: str) -> str:
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        raise HTTPException(503, "google-genai SDK not installed on server.")
+
     response_schema = {
         "type": "object",
         "properties": {
@@ -501,85 +512,147 @@ def _from_text_impl(
             "nodes": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
-                    "id":     {"type": "string"},
-                    "type":   {"type": "string"},
-                    "params": {"type": "object"},
+                    "id": {"type": "string"}, "type": {"type": "string"}, "params": {"type": "object"},
                 },
                 "required": ["id", "type", "params"],
             }},
             "edges": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
-                    "from":      {"type": "string"},
-                    "to":        {"type": "string"},
-                    "from_port": {"type": "string"},
-                    "to_port":   {"type": "string"},
+                    "from": {"type": "string"}, "to": {"type": "string"},
+                    "from_port": {"type": "string"}, "to_port": {"type": "string"},
                 },
                 "required": ["from", "to", "from_port", "to_port"],
             }},
         },
         "required": ["name", "nodes", "edges"],
     }
-
-    # Client construction can throw on some SDK versions if the key is malformed
     try:
         client = genai.Client(api_key=api_key)
     except Exception as e:
-        raise HTTPException(400, f"Could not initialize Gemini client: {e}. Check your API key on the Resources page.")
+        raise HTTPException(400, f"Could not init Gemini client: {e}")
 
-    def _call(extra_user: str = "") -> str:
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_prompt + extra_user,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-                response_schema=response_schema,
-                temperature=0.3,
-            ),
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            response_schema=response_schema,
+            temperature=0.3,
+        ),
+    )
+    return resp.text or ""
+
+
+def _call_anthropic(api_key: str, system_prompt: str, user_prompt: str) -> str:
+    try:
+        import anthropic
+    except ImportError:
+        raise HTTPException(503, "anthropic SDK not installed. Run: pip install anthropic")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=4096,
+        temperature=0.3,
+        system=system_prompt + "\n\nIMPORTANT: Output ONLY raw JSON — no prose, no markdown fences.",
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    return msg.content[0].text if msg.content else ""
+
+
+def _call_openai_compat(provider: str, api_key: str, system_prompt: str, user_prompt: str) -> str:
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise HTTPException(503, "openai SDK not installed. Run: pip install openai")
+
+    kwargs: Dict[str, Any] = {"api_key": api_key}
+    if provider in _OPENAI_COMPAT_BASE:
+        kwargs["base_url"] = _OPENAI_COMPAT_BASE[provider]
+
+    client = OpenAI(**kwargs)
+    resp = client.chat.completions.create(
+        model=_PROVIDER_MODEL[provider],
+        temperature=0.3,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt + "\n\nOutput ONLY raw JSON."},
+            {"role": "user",   "content": user_prompt},
+        ],
+    )
+    return resp.choices[0].message.content or ""
+
+
+def _normalize_api_error(provider: str, msg: str) -> HTTPException:
+    low = msg.lower()
+    if any(x in low for x in ("invalid api key", "api_key_invalid", "unauthorized", "401", "incorrect api key")):
+        return HTTPException(400, f"The {provider} API key is invalid. Update it on the Resources page.")
+    if any(x in low for x in ("quota", "rate", "429", "resource_exhausted", "too many requests")):
+        return HTTPException(429, f"{provider} rate limit hit. Wait a minute and try again.")
+    if any(x in low for x in ("permission", "403", "permission_denied")):
+        return HTTPException(403, f"The {provider} API key lacks permission for this model.")
+    return HTTPException(502, f"AI provider error ({provider}): {msg[:300]}")
+
+
+def _from_text_impl(
+    req: "FromTextRequest",
+    x_gemini_key:  Optional[str],
+    x_ai_key:      Optional[str],
+    x_ai_provider: Optional[str],
+) -> Dict[str, Any]:
+    import os, json as _json
+
+    # Resolve provider + key
+    provider = (x_ai_provider or "gemini").strip().lower()
+    api_key  = (x_ai_key or "").strip()
+
+    # Backward compat: X-Gemini-Key header
+    if not api_key and x_gemini_key:
+        api_key  = x_gemini_key.strip()
+        provider = "gemini"
+
+    # Env var fallback
+    if not api_key:
+        api_key = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
+
+    if not api_key:
+        raise HTTPException(
+            503,
+            f"AI generation needs an API key for {provider}. "
+            "Add yours under Resources → AI Model."
         )
-        return resp.text or ""
 
-    # Wrap the actual Gemini SDK call. Failures here are almost always one of:
-    #   • Bad/expired API key             → 400, ask user to check Resources page
-    #   • Quota / rate limit              → 429, ask user to wait
-    #   • Network or transient            → 503, ask user to retry
-    # Anything else falls through as a 502 (upstream provider error). We never
-    # let the raw SDK exception leak to the frontend as a bare 500.
+    system_prompt, user_prompt = _build_catalog_and_prompts(req)
+
+    def _call(extra: str = "") -> str:
+        prompt = user_prompt + extra
+        try:
+            if provider == "gemini":
+                return _call_gemini(api_key, system_prompt, prompt)
+            elif provider == "anthropic":
+                return _call_anthropic(api_key, system_prompt, prompt)
+            elif provider in ("openai", "groq", "mistral"):
+                return _call_openai_compat(provider, api_key, system_prompt, prompt)
+            else:
+                raise HTTPException(400, f"Unknown provider '{provider}'. Use: gemini, anthropic, openai, groq, mistral.")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _normalize_api_error(provider, str(e))
+
     try:
         raw = _call()
-    except Exception as e:
-        msg = str(e)
-        low = msg.lower()
-        if "api_key_invalid" in low or "api key not valid" in low or "invalid api key" in low:
-            raise HTTPException(
-                400,
-                "The Gemini API key is invalid. Update it on the Resources page "
-                "(get a free one at aistudio.google.com/apikey)."
-            )
-        if "quota" in low or "rate" in low or "429" in low or "resource_exhausted" in low:
-            raise HTTPException(
-                429,
-                "Gemini quota / rate limit hit. Wait a minute and try again, "
-                "or check your account at aistudio.google.com."
-            )
-        if "permission" in low or "permission_denied" in low or "403" in low:
-            raise HTTPException(
-                403,
-                "The Gemini API key doesn't have permission to call this model. "
-                "Make sure your key is enabled for Gemini 2.5 Flash."
-            )
-        # Unknown upstream failure — surface a readable message, not a raw 500.
-        raise HTTPException(502, f"AI provider error: {msg[:300]}")
+    except HTTPException:
+        raise
 
     try:
         graph = _json.loads(raw)
         validate_graph(graph)
     except Exception as e:
-        # Retry once with the error message — JSON-schema mode guarantees valid JSON
-        # so the only thing that can still fail is the graph-semantics validator.
         try:
-            raw2 = _call(f"\n\nYour previous attempt failed graph validation: {e}\nRebuild the graph correctly.")
+            raw2  = _call(f"\n\nYour previous attempt failed graph validation: {e}\nRebuild the graph correctly.")
             graph = _json.loads(raw2)
             validate_graph(graph)
         except Exception as e2:

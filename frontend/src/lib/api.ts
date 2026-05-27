@@ -255,21 +255,25 @@ export async function v2ChartPreview(body: any): Promise<ChartPreview> {
   return r.json();
 }
 
-// Read the user's Gemini key from localStorage (set on /resources). Sent as
-// an X-Gemini-Key header so the backend can use it without us needing a
-// server-side env var.
-function getUserGeminiKey(): string | null {
+// Read the user's AI key from localStorage (set on /resources).
+// Supports any provider: gemini, anthropic, openai, groq, mistral.
+function getUserAIKey(): { provider: string; key: string } | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem("edgekit.aiKey.v1");
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { provider: string; key: string };
-    return parsed.provider === "gemini" && parsed.key ? parsed.key : null;
+    return parsed.provider && parsed.key ? parsed : null;
   } catch { return null; }
 }
 
+export function hasUserAIKey(): boolean {
+  return !!getUserAIKey();
+}
+
+/** @deprecated use hasUserAIKey */
 export function hasUserGeminiKey(): boolean {
-  return !!getUserGeminiKey();
+  return hasUserAIKey();
 }
 
 // Pull the clean error reason out of FastAPI's standard response envelope.
@@ -290,8 +294,11 @@ async function readApiError(r: Response): Promise<string> {
 
 export async function v2FromText(body: { description: string; symbol?: string; timeframe?: string }): Promise<V2Graph> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const k = getUserGeminiKey();
-  if (k) headers["X-Gemini-Key"] = k;
+  const ai = getUserAIKey();
+  if (ai) {
+    headers["X-AI-Key"]      = ai.key;
+    headers["X-AI-Provider"] = ai.provider;
+  }
 
   const r = await fetch(`${API_URL}/graph/v2/from-text`, {
     method:  "POST",

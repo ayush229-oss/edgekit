@@ -170,11 +170,9 @@ function AISection() {
           )}
         </div>
 
-        {provider === "gemini" ? (
-          <p className="text-[11px] text-muted">Stored in your browser only. Sent as <code className="font-mono mx-1 px-1 bg-surface2 rounded">X-Gemini-Key</code> header when you use "Describe strategy".</p>
-        ) : (
-          <p className="text-[11px] text-amber-700">Currently only <strong>Google Gemini</strong> is wired to the AI features. Other providers are saved locally for future use.</p>
-        )}
+        <p className="text-[11px] text-muted">
+          Stored in your browser only. Sent securely when you use &quot;Describe strategy&quot; or &quot;Custom node builder&quot;.
+        </p>
       </div>
     </div>
   );
