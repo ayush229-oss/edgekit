@@ -11,7 +11,7 @@ const nextConfig = {
     return [
       // Proxy all /api/* calls from the browser to the local backend.
       // The browser only ever talks to port 3000 — no CORS, no second tunnel.
-      { source: "/api/:path*", destination: "http://127.0.0.1:8765/:path*" },
+      { source: "/api/:path*", destination: `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8765"}/:path*` },
     ];
   },
 };

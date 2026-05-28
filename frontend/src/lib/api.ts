@@ -10,9 +10,11 @@
 //   • Override: set NEXT_PUBLIC_API_URL to force a specific origin
 //               (e.g. when hosting backend on a different domain).
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL !== "/api"
-    ? process.env.NEXT_PUBLIC_API_URL
-    : (typeof window === "undefined" ? "http://127.0.0.1:8765" : "/api");
+  typeof window === "undefined"
+    // Server-side (SSR/RSC): call VPS directly
+    ? (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8765")
+    // Browser: always use /api proxy to avoid mixed-content (HTTPS → HTTP) blocks
+    : "/api";
 
 export type ParamSpec = {
   key: string; label: string; type: "int" | "float" | "select" | "bool";
