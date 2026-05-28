@@ -12,6 +12,7 @@ import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { TradeClipPair } from "@/components/TradeClip";
+import { API_URL } from "@/lib/api";
 
 export const revalidate = 0; // always fresh so saved strategies show immediately
 
@@ -36,7 +37,7 @@ type V2Template = { id: string; name: string; description: string };
 
 async function fetchTemplates(): Promise<V2Template[]> {
   try {
-    const r = await fetch("http://127.0.0.1:8765/graph/v2/templates", {
+    const r = await fetch("${API_URL}/graph/v2/templates", {
       next: { revalidate: 300 },
     });
     if (!r.ok) return [];
@@ -48,7 +49,7 @@ async function fetchTemplates(): Promise<V2Template[]> {
 
 async function fetchPreview(strategyId: string) {
   try {
-    const r = await fetch(`http://127.0.0.1:8765/strategies/${strategyId}/preview-trades`, {
+    const r = await fetch(`${API_URL}/strategies/${strategyId}/preview-trades`, {
       next: { revalidate: 3600 },
     });
     return r.ok ? r.json() : null;
