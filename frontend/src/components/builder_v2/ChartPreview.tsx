@@ -111,7 +111,7 @@ export function ChartPreview({
   // Re-sync when the top-bar value changes while modal is closed
   useEffect(() => { if (!open) { setNBars(defaultBars); setLocalTf(timeframe); } }, [defaultBars, timeframe, open]);
   const [selIdx, setSelIdx] = useState<number | null>(null);
-  const [showZones,      setShowZones]      = useState(false);
+  const [showZones,      setShowZones]      = useState(true);
   const [showRibbon,     setShowRibbon]     = useState(false);
   const [showIndicators, setShowIndicators] = useState(true);
 
@@ -195,26 +195,45 @@ export function ChartPreview({
     };
     const markers: M[] = [];
     data.trades.forEach((tr) => {
+      const isBull = tr.direction === "Bull";
+
+      // Signal bar — where the condition fired (small dot above/below)
+      if (tr.signal_idx !== null && tr.fill_idx !== null && tr.signal_idx !== tr.fill_idx) {
+        const sb = data.bars[tr.signal_idx];
+        if (sb) {
+          markers.push({
+            time:     sb.t as UTCTimestamp,
+            position: (isBull ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition,
+            color:    (isBull ? C.sage : C.terra) + "88",
+            shape:    "circle",
+            size:     0.4,
+          });
+        }
+      }
+
+      // Entry fill — large arrow showing direction
       const fi = tr.fill_idx ?? tr.signal_idx;
       const fb = data.bars[fi];
       if (fb) {
         markers.push({
           time:     fb.t as UTCTimestamp,
-          position: (tr.direction === "Bull" ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition,
-          color:    tr.direction === "Bull" ? C.sage : C.terra,
-          shape:    "circle",
-          size:     0.6,
+          position: (isBull ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition,
+          color:    isBull ? C.sage : C.terra,
+          shape:    (isBull ? "arrowUp" : "arrowDown") as SeriesMarkerShape,
+          size:     1.5,
         });
       }
+
+      // Exit marker — X shape
       if (tr.exit_idx !== null) {
         const eb = data.bars[tr.exit_idx];
         if (eb) {
           markers.push({
             time:     eb.t as UTCTimestamp,
-            position: (tr.direction === "Bull" ? "aboveBar" : "belowBar") as SeriesMarkerBarPosition,
+            position: (isBull ? "aboveBar" : "belowBar") as SeriesMarkerBarPosition,
             color:    tradeColor(tr),
             shape:    "circle",
-            size:     0.6,
+            size:     0.8,
           });
         }
       }
@@ -641,10 +660,10 @@ export function ChartPreview({
         {/* ── Legend ───────────────────────────────────────────────────── */}
         <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/50 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted">
           <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.sage }} /> Long entry
+            <span className="text-[10px]" style={{ color: C.sage }}>▲</span> Long entry
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.terra }} /> Short entry
+            <span className="text-[10px]" style={{ color: C.terra }}>▼</span> Short entry
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.sage }} /> Win exit
