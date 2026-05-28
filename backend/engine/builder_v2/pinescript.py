@@ -98,6 +98,57 @@ def _emit_indicator(node: dict, in_vars: Dict[str, str]) -> Tuple[Dict[str, str]
         src = p.get("source", "close")
         return {"value": src}, []
 
+    if t == "indicator.sma":
+        return {"value": f"sma_{nid}"}, [f"sma_{nid} = ta.sma(close, {p_('period')})"]
+
+    if t == "indicator.cci":
+        return {"value": f"cci_{nid}"}, [f"cci_{nid} = ta.cci(high, low, close, {p_('period')})"]
+
+    if t == "indicator.williams_r":
+        return {"value": f"wpr_{nid}"}, [f"wpr_{nid} = ta.wpr({p_('period')})"]
+
+    if t == "indicator.roc":
+        return {"value": f"roc_{nid}"}, [f"roc_{nid} = ta.roc(close, {p_('period')})"]
+
+    if t == "indicator.supertrend":
+        return ({"value": f"st_{nid}", "direction": f"std_{nid}"},
+                [f"[st_{nid}, std_{nid}] = ta.supertrend({p_('mult')}, {p_('period')})"])
+
+    if t == "indicator.order_block":
+        # Approximate: track the high/mid/low of the last OB candle
+        dir_ = p.get("direction", "bull")
+        if dir_ == "bull":
+            return ({"high": f"ob_h_{nid}", "mid": f"ob_m_{nid}", "low": f"ob_l_{nid}"},
+                    [f"var float ob_h_{nid} = na",
+                     f"var float ob_l_{nid} = na",
+                     f"ob_m_{nid} = na",
+                     f"// Bull OB: last red candle before a strong up move",
+                     f"if close[1] < open[1] and close > high[1]",
+                     f"    ob_h_{nid} := high[1]",
+                     f"    ob_l_{nid} := low[1]",
+                     f"ob_m_{nid} := (ob_h_{nid} + ob_l_{nid}) / 2"])
+        else:
+            return ({"high": f"ob_h_{nid}", "mid": f"ob_m_{nid}", "low": f"ob_l_{nid}"},
+                    [f"var float ob_h_{nid} = na",
+                     f"var float ob_l_{nid} = na",
+                     f"ob_m_{nid} = na",
+                     f"// Bear OB: last green candle before a strong down move",
+                     f"if close[1] > open[1] and close < low[1]",
+                     f"    ob_h_{nid} := high[1]",
+                     f"    ob_l_{nid} := low[1]",
+                     f"ob_m_{nid} := (ob_h_{nid} + ob_l_{nid}) / 2"])
+
+    if t == "indicator.ichimoku":
+        tp = p.get("tenkan_period", 9)
+        kp = p.get("kijun_period",  26)
+        sp = p.get("senkou_b_period", 52)
+        return ({"tenkan": f"ich_t_{nid}", "kijun": f"ich_k_{nid}",
+                 "senkou_a": f"ich_sa_{nid}", "senkou_b": f"ich_sb_{nid}"},
+                [f"ich_t_{nid}  = math.avg(ta.highest(high, {p_('tenkan_period')}), ta.lowest(low, {p_('tenkan_period')}))",
+                 f"ich_k_{nid}  = math.avg(ta.highest(high, {p_('kijun_period')}),  ta.lowest(low, {p_('kijun_period')}))",
+                 f"ich_sa_{nid} = math.avg(ich_t_{nid}, ich_k_{nid})",
+                 f"ich_sb_{nid} = math.avg(ta.highest(high, {p_('senkou_b_period')}), ta.lowest(low, {p_('senkou_b_period')}))"])
+
     return {}, [f"// TODO: indicator '{t}' has no Pine translator yet"]
 
 
@@ -219,6 +270,59 @@ def _emit_filter(node: dict, in_vars: Dict[str, str]) -> Tuple[Dict[str, str], L
     return ({"long_cond": f"long_{nid}", "short_cond": f"short_{nid}"},
             [f"long_{nid}  = ({in_vars.get('long_cond',  'false')}) and {gate}",
              f"short_{nid} = ({in_vars.get('short_cond', 'false')}) and {gate}"])
+
+
+def _exit_lines(exit_nodes: List[str], nodes: Dict[str, Any]) -> List[str]:
+    """
+    Emit Pine lines for exit-lane nodes.
+    These lines are inserted just before the strategy.exit calls so they can
+    update entrySLLong/entrySLShort (trail logic).
+    """
+    lines: List[str] = []
+    for nid in exit_nodes:
+        node = nodes[nid]
+        t    = node["type"]
+        rid  = _sanitize(nid)
+        p    = node["params"]
+        if t == "exit.target_and_trail":
+            trail = p.get("trail_mode", "none")
+            if trail == "candle":
+                lines += [
+                    "// Trail: candle — ratchet SL to prior bar low/high while in profit",
+                    "if strategy.position_size > 0 and close > strategy.position_avg_price",
+                    f"    entrySLLong := math.max(entrySLLong, low[1] - {rid}_trail_buf * syminfo.mintick * 10)",
+                    "if strategy.position_size < 0 and close < strategy.position_avg_price",
+                    f"    entrySLShort := math.min(entrySLShort, high[1] + {rid}_trail_buf * syminfo.mintick * 10)",
+                ]
+            elif trail == "atr":
+                lines += [
+                    "// Trail: ATR-based trail stop",
+                    "_atr_trail = ta.atr(14)",
+                    "if strategy.position_size > 0 and close > strategy.position_avg_price",
+                    f"    entrySLLong := math.max(entrySLLong, close - _atr_trail * {rid}_trail_buf)",
+                    "if strategy.position_size < 0 and close < strategy.position_avg_price",
+                    f"    entrySLShort := math.min(entrySLShort, close + _atr_trail * {rid}_trail_buf)",
+                ]
+            elif trail == "pips":
+                lines += [
+                    "// Trail: fixed-pip trail stop",
+                    "if strategy.position_size > 0 and close > strategy.position_avg_price",
+                    f"    entrySLLong := math.max(entrySLLong, close - {rid}_trail_buf * syminfo.mintick * 10)",
+                    "if strategy.position_size < 0 and close < strategy.position_avg_price",
+                    f"    entrySLShort := math.min(entrySLShort, close + {rid}_trail_buf * syminfo.mintick * 10)",
+                ]
+            elif trail == "swing":
+                lines += [
+                    "// Trail: swing-based trail (5-bar lookback)",
+                    "_swing_trail_l = ta.lowest(low[1], 5)",
+                    "_swing_trail_h = ta.highest(high[1], 5)",
+                    "if strategy.position_size > 0 and close > strategy.position_avg_price",
+                    "    entrySLLong := math.max(entrySLLong, _swing_trail_l)",
+                    "if strategy.position_size < 0 and close < strategy.position_avg_price",
+                    "    entrySLShort := math.min(entrySLShort, _swing_trail_h)",
+                ]
+            # trail == "none" → no extra lines needed
+    return lines
 
 
 # ── Top-level generator ───────────────────────────────────────────────────
@@ -384,23 +488,28 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
         "qtyLong  = (strategy.equity * risk_pct / 100) / math.max(close - slPriceLong, syminfo.mintick)",
         "qtyShort = (strategy.equity * risk_pct / 100) / math.max(slPriceShort - close, syminfo.mintick)",
         "",
-        "// ────────── Entries ──────────",
+        "// ────────── Entries (SL anchored at entry bar, not floating) ──────────",
+        "var float entrySLLong  = na",
+        "var float entrySLShort = na",
+        "var int   entryBar     = na",
         "if longCondition and strategy.position_size == 0",
+        "    entrySLLong := slPriceLong",
+        "    entryBar    := bar_index",
         '    strategy.entry("Long", strategy.long, qty=qtyLong)',
         "if shortCondition and strategy.position_size == 0",
+        "    entrySLShort := slPriceShort",
+        "    entryBar     := bar_index",
         '    strategy.entry("Short", strategy.short, qty=qtyShort)',
         "",
         "// ────────── Exits ──────────",
-        "// Target = entry + target_r * (entry - SL).  Trailing not perfectly mirrored — Pine uses",
-        "// trail_offset based on points; the Edgekit candle/atr/swing trail modes need manual",
-        "// fine-tuning after import. Use trail_mode input to choose; default is plain TP+SL.",
-        "tpLong  = strategy.position_avg_price + target_r * (strategy.position_avg_price - slPriceLong)",
-        "tpShort = strategy.position_avg_price - target_r * (slPriceShort - strategy.position_avg_price)",
+        "tpLong  = strategy.position_avg_price + target_r * (strategy.position_avg_price - entrySLLong)",
+        "tpShort = strategy.position_avg_price - target_r * (entrySLShort - strategy.position_avg_price)",
         "",
+        *_exit_lines(by_lane.get("exit", []), nodes),
         "if strategy.position_size > 0",
-        '    strategy.exit("ExitL", from_entry="Long",  stop=slPriceLong,  limit=tpLong)',
+        '    strategy.exit("ExitL", from_entry="Long",  stop=entrySLLong,  limit=tpLong)',
         "if strategy.position_size < 0",
-        '    strategy.exit("ExitS", from_entry="Short", stop=slPriceShort, limit=tpShort)',
+        '    strategy.exit("ExitS", from_entry="Short", stop=entrySLShort, limit=tpShort)',
         "",
         "// ────────── Plots ──────────",
         "// SL lines — only visible while a trade is open",
