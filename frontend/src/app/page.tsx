@@ -40,7 +40,7 @@ const MOAT = [
 const STEPS = [
   { n: "01", title: "Pick a template", body: "Start from 10+ proven strategies — EMA Cross, OB+FVG, Liquidity Engulf, RSI Mean Reversion, and more. Or start blank." },
   { n: "02", title: "Wire your logic", body: "Drag nodes onto the canvas. Connect outputs to inputs. Signal, filter, entry, risk — snap them together." },
-  { n: "03", title: "Backtest on real data", body: "Hit Run. Years of XAUUSD M15 data processed in under 2 seconds. Real fills. No lookahead. Honest numbers." },
+  { n: "03", title: "Backtest on real data", body: "Hit Run. Years of market data processed in under 2 seconds. Real fills. No lookahead. Honest numbers." },
   { n: "04", title: "Iterate until it clicks", body: "Tune one param, re-run, watch the equity curve react. When it works, export as Pine Script v6 for TradingView." },
 ];
 
@@ -87,7 +87,7 @@ export default async function LandingPage() {
       <section className="hero-grad max-w-5xl mx-auto px-6 pt-24 pb-20 text-center">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface border border-border text-[11.5px] text-muted mb-8 shadow-soft">
           <span className="w-1.5 h-1.5 rounded-full bg-up animate-pulse" />
-          Live trade previews on real XAUUSD M15 data
+          Live trade previews on real market data
         </div>
         <h1 className="text-[44px] sm:text-[60px] md:text-display-1 font-bold tracking-tight leading-[1.04] text-ink mb-6">
           Your edge is<br />

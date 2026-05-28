@@ -216,7 +216,7 @@ export default async function TemplatesPage() {
       )}
 
       <p className="text-[11px] text-muted text-center italic">
-        Trade clips are real winning + losing trades from a live backtest on XAUUSD M15. Refreshes hourly.
+        Trade clips are real winning + losing trades from a live backtest. Refreshes hourly.
       </p>
     </div>
   );

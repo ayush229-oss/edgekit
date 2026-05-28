@@ -6,7 +6,7 @@ const FEATURES = [
   {
     icon: "⚡",
     title: "Backtests in seconds",
-    body: "Run years of XAUUSD M15 data in under 2 seconds. Change a parameter, instantly see new results.",
+    body: "Run years of market data in under 2 seconds. Change a parameter, instantly see new results.",
   },
   {
     icon: "🎛️",
