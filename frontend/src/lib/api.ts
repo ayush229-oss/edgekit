@@ -309,6 +309,37 @@ export async function v2FromText(body: { description: string; symbol?: string; t
   return r.json();
 }
 
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatResponse =
+  | { type: "message"; content: string }
+  | { type: "graph"; graph: V2Graph };
+
+export async function v2Chat(body: {
+  messages:  ChatMessage[];
+  symbol?:   string;
+  timeframe?: string;
+}): Promise<ChatResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const ai = getUserAIKey();
+  if (ai) {
+    headers["X-AI-Key"]      = ai.key;
+    headers["X-AI-Provider"] = ai.provider;
+  }
+  const r = await fetch(`${API_URL}/graph/v2/chat`, {
+    method:  "POST",
+    headers,
+    body:    JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
+  return r.json();
+}
+
+export async function getGlobalStats(): Promise<{ total_backtests: number; total_users: number }> {
+  const r = await fetch(`${API_URL}/stats/global`, { next: { revalidate: 60 } } as any);
+  if (!r.ok) return { total_backtests: 0, total_users: 0 };
+  return r.json();
+}
+
 export async function v2ExportPineScript(body: any): Promise<{ code: string; lines: number }> {
   const r = await fetch(`${API_URL}/graph/v2/pinescript`, {
     method:  "POST",

@@ -57,8 +57,8 @@ const ChartPreview = dynamic(
   () => import("@/components/builder_v2/ChartPreview").then((m) => ({ default: m.ChartPreview })),
   { ssr: false }
 );
-const StrategyDescriber = dynamic(
-  () => import("@/components/builder_v2/StrategyDescriber").then((m) => ({ default: m.StrategyDescriber })),
+const StrategyChat = dynamic(
+  () => import("@/components/builder_v2/StrategyChat").then((m) => ({ default: m.StrategyChat })),
   { ssr: false }
 );
 const PineExportModal = dynamic(
@@ -296,18 +296,21 @@ function BuilderInner() {
   // shifted by a base offset so the new sub-graph doesn't stack on top of
   // whatever's already there.
   function addCustomNode(cn: CustomNode) {
-    const suffix = Math.random().toString(36).slice(2, 7);
+    if (library.length === 0) {
+      setErr("Node library is still loading — please try again in a moment.");
+      return;
+    }
+
+    const suffix     = Math.random().toString(36).slice(2, 7);
     const remap: Record<string, string> = {};
     for (const n of cn.graph.nodes) {
       remap[n.id] = `${n.id}_${suffix}`;
     }
 
-    // Find a clear area on the canvas to drop the sub-graph into
     const existingXs = nodes.map((n) => n.position.x);
     const baseX      = existingXs.length > 0 ? Math.max(...existingXs) + 320 : 200;
     const baseY      = 100;
 
-    // Origin of the imported graph (to offset relative to baseX/baseY)
     const subXs = cn.graph.nodes.map((n) => n.position?.x ?? 0);
     const subYs = cn.graph.nodes.map((n) => n.position?.y ?? 0);
     const minX  = subXs.length > 0 ? Math.min(...subXs) : 0;
@@ -315,9 +318,10 @@ function BuilderInner() {
 
     const specByType = Object.fromEntries(library.map((s) => [s.type, s]));
 
+    const missing: string[] = [];
     const newNodes: Node[] = cn.graph.nodes.map((n) => {
       const spec = specByType[n.type];
-      if (!spec) return null as any;
+      if (!spec) { missing.push(n.type); return null as any; }
       return {
         id:       remap[n.id],
         type:     "v2Node",
@@ -328,6 +332,11 @@ function BuilderInner() {
         data: { spec, params: { ...n.params }, selected: false },
       };
     }).filter(Boolean);
+
+    if (missing.length > 0) {
+      setErr(`Custom node uses unknown types: ${missing.join(", ")}. It may have been created with an older version.`);
+      return;
+    }
 
     const newEdges: Edge[] = cn.graph.edges.map((e, i) => ({
       id:           `e_${suffix}_${i}`,
@@ -579,8 +588,8 @@ function BuilderInner() {
         </div>
       )}
 
-      {/* ── NL describer modal ─────────────────────────────────────── */}
-      <StrategyDescriber
+      {/* ── AI strategy chat modal ─────────────────────────────────── */}
+      <StrategyChat
         open={descOpen}
         onClose={() => setDescOpen(false)}
         onLoadGraph={loadGraphFromDescriber}

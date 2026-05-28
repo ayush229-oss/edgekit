@@ -96,6 +96,16 @@ def healthz():
     return {"ok": True, "strategies": len(REGISTRY), "store": store.stats()}
 
 
+# ─── Global stats (landing page counters) ─────────────────────────────────────
+@app.get("/stats/global")
+def global_stats(db: Session = Depends(get_db)):
+    """Total backtests run + total registered users. Cached by ISR on the frontend."""
+    from sqlalchemy import func
+    total_backtests = db.query(func.count(BacktestRun.id)).scalar() or 0
+    total_users     = db.query(func.count(User.id)).scalar() or 0
+    return {"total_backtests": int(total_backtests), "total_users": int(total_users)}
+
+
 # ─── Strategies ──────────────────────────────────────────────────────────────
 @app.get("/strategies", response_model=list[StrategySummary])
 def list_strategies():

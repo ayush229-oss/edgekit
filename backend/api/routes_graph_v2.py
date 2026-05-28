@@ -676,6 +676,221 @@ def _from_text_impl(
     return graph
 
 
+# ─── AI Chat: conversational strategy builder ─────────────────────────────
+class ChatMessage(BaseModel):
+    role:    str   # "user" | "assistant"
+    content: str
+
+class ChatRequest(BaseModel):
+    messages:  List[ChatMessage]
+    symbol:    str = "XAUUSD"
+    timeframe: str = "M15"
+
+_CHAT_SYSTEM = """You are Edgekit's friendly trading strategy assistant. Your job is to help non-technical traders design a backtestable strategy through conversation — without them needing to know code, Python, or indicators.
+
+You have two modes:
+
+MODE 1 — CLARIFY (when you don't yet have enough information):
+Ask ONE clear, simple question per turn. Focus on:
+  - What market condition triggers a trade? (e.g. "price breaks above a high", "RSI is low", "candle pattern")
+  - Long, short, or both directions?
+  - Where does the stop loss go? (e.g. "below the last swing low", "fixed distance")
+  - Any filters? (e.g. "only trade London hours", "only when trend is strong")
+Keep questions short. Use plain trader language, not technical jargon.
+
+MODE 2 — BUILD (when you have enough to build a solid graph):
+Output ONLY this JSON, nothing else:
+{{"type":"graph","graph":{graph_schema}}}
+
+where graph matches the V2Graph schema with available nodes below.
+
+V2Graph schema:
+{{"name":string,"nodes":[{{"id":string,"type":string,"params":{{...}}}}],"edges":[{{"from":string,"to":string,"from_port":string,"to_port":string}}]}}
+
+Available nodes:
+{catalog}
+
+Lane flow: universe → indicator → alpha → filter → sizing → risk → exit → execution
+
+Rules:
+1. Only use node types from the catalog above.
+2. Every edge from_port type must equal to_port type.
+3. Every required input must be wired.
+4. End in exactly one execution node.
+5. Use sensible default params.
+
+MODE 1 output format (when asking questions):
+{{"type":"message","content":"your question here"}}
+
+CRITICAL: Output ONLY valid JSON matching one of the two formats above. No markdown. No prose outside the JSON."""
+
+
+@router.post("/chat")
+def graph_chat(
+    req: ChatRequest,
+    x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
+) -> Dict[str, Any]:
+    """
+    Multi-turn strategy design assistant for non-technical users.
+    Returns {type: "message", content: "..."} when asking clarifying questions,
+    or {type: "graph", graph: {...}} when ready to build.
+    """
+    import os, json as _json
+
+    provider = (x_ai_provider or "gemini").strip().lower()
+    api_key  = (x_ai_key or "").strip()
+    if not api_key and x_gemini_key:
+        api_key  = x_gemini_key.strip()
+        provider = "gemini"
+    if not api_key:
+        api_key = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
+    if not api_key:
+        raise HTTPException(503, "AI key required. Add yours under Resources → AI Model.")
+
+    import json as _json
+    catalog = []
+    for spec in NODE_LIBRARY.values():
+        d = spec.to_dict()
+        catalog.append({
+            "type":    d["type"],
+            "lane":    d["lane"],
+            "label":   d["label"],
+            "inputs":  [{"name": p["name"], "type": p["type"]} for p in d["inputs"]],
+            "outputs": [{"name": p["name"], "type": p["type"]} for p in d["outputs"]],
+            "params":  [{"key": p["key"], "type": p["type"], "default": p["default"]}
+                        for p in d["params"]],
+        })
+
+    graph_schema = '{"name":string,"nodes":[{"id":string,"type":string,"params":{}}],"edges":[{"from":string,"to":string,"from_port":string,"to_port":string}]}'
+    system_prompt = _CHAT_SYSTEM.format(
+        catalog=_json.dumps(catalog, separators=(",", ":")),
+        graph_schema=graph_schema,
+    )
+
+    # Convert messages to format each provider needs
+    history = [{"role": m.role, "content": m.content} for m in req.messages]
+
+    # Add context about symbol/timeframe
+    if history and history[0]["role"] == "user":
+        history = list(history)  # copy
+        history[0] = {
+            "role": "user",
+            "content": f"[Symbol: {req.symbol}, Timeframe: {req.timeframe}]\n\n{history[0]['content']}",
+        }
+
+    try:
+        raw = _call_chat(provider, api_key, system_prompt, history)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _normalize_api_error(provider, str(e))
+
+    # Parse response
+    try:
+        result = _json.loads(raw.strip())
+        if result.get("type") == "graph":
+            graph = result.get("graph")
+            if not isinstance(graph, dict):
+                raise ValueError("graph field missing")
+            try:
+                validate_graph(graph)
+                # Auto-layout
+                lane_order = ["universe","indicator","alpha","filter","sizing","risk","exit","execution"]
+                lane_of = {spec.type: spec.lane for spec in NODE_LIBRARY.values()}
+                lane_buckets: Dict[str, List[str]] = {l: [] for l in lane_order}
+                for n in graph.get("nodes", []):
+                    ln = lane_of.get(n.get("type", ""), "alpha")
+                    lane_buckets.setdefault(ln, []).append(n["id"])
+                pos: Dict[str, Dict[str, int]] = {}
+                for col, lane in enumerate(lane_order):
+                    for row, nid in enumerate(lane_buckets.get(lane, [])):
+                        pos[nid] = {"x": 80 + col * 240, "y": 80 + row * 180}
+                for n in graph.get("nodes", []):
+                    if n["id"] in pos:
+                        n["position"] = pos[n["id"]]
+            except Exception as e:
+                return {"type": "message", "content": f"I tried to build your strategy but hit a validation issue ({e}). Could you give me a bit more detail about the entry condition?"}
+            return {"type": "graph", "graph": graph}
+        elif result.get("type") == "message":
+            return {"type": "message", "content": result.get("content", "")}
+        else:
+            return {"type": "message", "content": "Tell me more about your strategy idea — what market condition should trigger a trade?"}
+    except Exception:
+        return {"type": "message", "content": raw.strip() if raw.strip() else "Tell me more about your strategy idea."}
+
+
+def _call_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict]) -> str:
+    """Call AI provider with a full conversation history."""
+    if provider == "gemini":
+        return _call_gemini_chat(api_key, system_prompt, history)
+    elif provider == "anthropic":
+        return _call_anthropic_chat(api_key, system_prompt, history)
+    elif provider in ("openai", "groq", "mistral"):
+        return _call_openai_compat_chat(provider, api_key, system_prompt, history)
+    else:
+        raise HTTPException(400, f"Unknown provider '{provider}'.")
+
+
+def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict]) -> str:
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        raise HTTPException(503, "google-genai SDK not installed.")
+    client = genai.Client(api_key=api_key)
+    # Gemini uses alternating user/model turns
+    contents = []
+    for m in history:
+        role = "model" if m["role"] == "assistant" else "user"
+        contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.4,
+        ),
+    )
+    return resp.text or ""
+
+
+def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict]) -> str:
+    try:
+        import anthropic
+    except ImportError:
+        raise HTTPException(503, "anthropic SDK not installed.")
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=4096,
+        temperature=0.4,
+        system=system_prompt,
+        messages=history,
+    )
+    return msg.content[0].text if msg.content else ""
+
+
+def _call_openai_compat_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict]) -> str:
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise HTTPException(503, "openai SDK not installed.")
+    kwargs: Dict[str, Any] = {"api_key": api_key}
+    if provider in _OPENAI_COMPAT_BASE:
+        kwargs["base_url"] = _OPENAI_COMPAT_BASE[provider]
+    client = OpenAI(**kwargs)
+    messages = [{"role": "system", "content": system_prompt}] + history
+    resp = client.chat.completions.create(
+        model=_PROVIDER_MODEL[provider],
+        temperature=0.4,
+        response_format={"type": "json_object"},
+        messages=messages,
+    )
+    return resp.choices[0].message.content or ""
+
+
 @router.post("/pinescript")
 def export_pinescript(req: PineExportRequest) -> Dict[str, Any]:
     """Generate a TradingView Pine Script v5 strategy from the graph."""

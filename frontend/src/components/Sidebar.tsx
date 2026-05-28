@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import {
   Home, BarChart2, Layers, Wrench, TrendingUp, MessageSquare,
   Lightbulb, Share2, FileText, ShieldCheck,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, ArrowLeft, ArrowRight,
 } from "lucide-react";
 
 type NavItem = { href: string; icon: React.ElementType; label: string };
@@ -53,6 +53,7 @@ function NavLink({
 
 export function Sidebar() {
   const pathname  = usePathname();
+  const router    = useRouter();
   const [collapsed,  setCollapsed]  = useState(false);
   const [adminUser,  setAdminUser]  = useState(false);
 
@@ -78,25 +79,35 @@ export function Sidebar() {
     >
       {/* Logo row */}
       <div
-        className={`h-14 flex items-center border-b border-border px-3 shrink-0
-          ${collapsed ? "justify-center" : "justify-between"}`}
+        className={`h-14 flex items-center border-b border-border px-3 shrink-0 gap-1
+          ${collapsed ? "justify-center flex-col gap-0.5 py-1" : "justify-between"}`}
       >
-        <Link href="/" className={`flex items-center gap-2 ${collapsed ? "" : ""}`}>
-          <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px] shrink-0 hover:bg-money transition-colors">
-            E
-          </div>
-          {!collapsed && (
-            <span className="font-semibold text-[14px] whitespace-nowrap">Edgekit</span>
-          )}
-        </Link>
-        {!collapsed && (
-          <button
-            onClick={() => setCollapsed(true)}
-            className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"
-            title="Collapse sidebar"
-          >
-            <ChevronLeft size={14} />
-          </button>
+        {collapsed ? (
+          <>
+            <Link href="/" title="Edgekit">
+              <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px] hover:bg-money transition-colors">
+                E
+              </div>
+            </Link>
+            <div className="flex items-center gap-0.5">
+              <button onClick={() => router.back()}    title="Go back"    className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ArrowLeft  size={12} /></button>
+              <button onClick={() => router.forward()} title="Go forward" className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ArrowRight size={12} /></button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Link href="/" className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px] shrink-0 hover:bg-money transition-colors">
+                E
+              </div>
+              <span className="font-semibold text-[14px] whitespace-nowrap">Edgekit</span>
+            </Link>
+            <div className="flex items-center gap-0.5">
+              <button onClick={() => router.back()}    title="Go back"    className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ArrowLeft  size={14} /></button>
+              <button onClick={() => router.forward()} title="Go forward" className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ArrowRight size={14} /></button>
+              <button onClick={() => setCollapsed(true)} title="Collapse sidebar" className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ChevronLeft size={14} /></button>
+            </div>
+          </>
         )}
       </div>
 

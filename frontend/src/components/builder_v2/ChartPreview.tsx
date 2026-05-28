@@ -103,24 +103,26 @@ export function ChartPreview({
   const selPriceLinesRef = useRef<IPriceLine[]>([]);
 
   // ── State ─────────────────────────────────────────────────────────────
-  const [data,   setData]   = useState<CP | null>(null);
-  const [busy,   setBusy]   = useState(false);
-  const [err,    setErr]    = useState<string | null>(null);
-  const [nBars,  setNBars]  = useState(defaultBars);
-  // Re-sync if the user changes the top-bar Bars value while modal is closed
-  useEffect(() => { if (!open) setNBars(defaultBars); }, [defaultBars, open]);
+  const [data,    setData]    = useState<CP | null>(null);
+  const [busy,    setBusy]    = useState(false);
+  const [err,     setErr]     = useState<string | null>(null);
+  const [nBars,   setNBars]   = useState(defaultBars);
+  const [localTf, setLocalTf] = useState(timeframe);
+  // Re-sync when the top-bar value changes while modal is closed
+  useEffect(() => { if (!open) { setNBars(defaultBars); setLocalTf(timeframe); } }, [defaultBars, timeframe, open]);
   const [selIdx, setSelIdx] = useState<number | null>(null);
   const [showZones,      setShowZones]      = useState(false);
   const [showRibbon,     setShowRibbon]     = useState(false);
   const [showIndicators, setShowIndicators] = useState(true);
 
+  const TF_OPTIONS = ["M5", "M15", "M30", "H1", "H4", "D1"];
 
   // ── Fetch on open / param change ──────────────────────────────────────
   useEffect(() => {
     if (!open || !graph || graph.nodes.length === 0) return;
     setBusy(true); setErr(null); setData(null); setSelIdx(null);
     v2ChartPreview({
-      graph, symbol, timeframe, n_bars: nBars,
+      graph, symbol, timeframe: localTf, n_bars: nBars,
       target_r:         mgmt.target_r,
       target_close_pct: mgmt.target_close_pct,
       trail_mode:       mgmt.trail_mode,
@@ -130,7 +132,7 @@ export function ChartPreview({
       .then(setData)
       .catch((e) => setErr(e.message ?? String(e)))
       .finally(() => setBusy(false));
-  }, [open, graph, mgmt, symbol, timeframe, nBars]);    // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, graph, mgmt, symbol, localTf, nBars]);    // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // ── Build chart when data arrives ─────────────────────────────────────
@@ -451,7 +453,23 @@ export function ChartPreview({
         <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-3 flex-wrap">
             <span className="font-semibold text-sm">{symbol}</span>
-            <span className="text-xs px-1.5 py-0.5 rounded bg-cream border border-border text-muted">{timeframe}</span>
+            {/* Timeframe switcher */}
+            <div className="flex items-center gap-0.5 bg-cream rounded-lg border border-border p-0.5">
+              {TF_OPTIONS.map((tf) => (
+                <button
+                  key={tf}
+                  onClick={() => setLocalTf(tf)}
+                  disabled={busy}
+                  className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${
+                    localTf === tf
+                      ? "bg-ink text-cream shadow-sm"
+                      : "text-muted hover:text-ink"
+                  }`}
+                >
+                  {tf}
+                </button>
+              ))}
+            </div>
             {data && (
               <>
                 <span className="text-muted text-xs">·</span>
