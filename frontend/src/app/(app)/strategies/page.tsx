@@ -37,7 +37,7 @@ type V2Template = { id: string; name: string; description: string };
 
 async function fetchTemplates(): Promise<V2Template[]> {
   try {
-    const r = await fetch("${API_URL}/graph/v2/templates", {
+    const r = await fetch(`${API_URL}/graph/v2/templates`, {
       next: { revalidate: 300 },
     });
     if (!r.ok) return [];
