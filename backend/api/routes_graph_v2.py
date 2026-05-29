@@ -791,9 +791,8 @@ def graph_chat(
           ("message", text)        — a clarifying question / plain reply
           ("invalid", error_str)   — claimed a graph but it failed validation
         """
-        try:
-            result = _json.loads(raw_text.strip())
-        except Exception:
+        result = _parse_model_json(raw_text)
+        if result is None:
             txt = raw_text.strip()
             return ("message", txt or "Tell me more about your strategy idea.")
         if result.get("type") == "graph":
@@ -855,6 +854,46 @@ def graph_chat(
         "to risk per trade — or pick a stronger model from the Model menu, and I'll "
         "try again."
     )}
+
+
+def _parse_model_json(raw_text: str) -> Optional[Dict[str, Any]]:
+    """Parse a model reply that should be JSON, tolerating common wrappers.
+
+    Models (especially Claude) often wrap JSON in ```json ... ``` fences or add
+    stray prose. Try a plain parse first, then strip code fences, then fall back
+    to the outermost {...} slice. Returns the parsed object, or None if no JSON
+    object can be recovered.
+    """
+    import json as _json, re as _re
+    if not raw_text:
+        return None
+    text = raw_text.strip()
+
+    def _try(s: str) -> Optional[Dict[str, Any]]:
+        try:
+            obj = _json.loads(s)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+    obj = _try(text)
+    if obj is not None:
+        return obj
+
+    # Strip a leading/trailing markdown code fence (```json ... ``` or ``` ... ```).
+    fenced = _re.match(r"^```[a-zA-Z]*\s*\n?(.*?)\n?```$", text, _re.DOTALL)
+    if fenced:
+        obj = _try(fenced.group(1).strip())
+        if obj is not None:
+            return obj
+
+    # Last resort: grab from the first '{' to the last '}'.
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        obj = _try(text[start:end + 1])
+        if obj is not None:
+            return obj
+    return None
 
 
 def _layout_graph(graph: Dict[str, Any]) -> None:
