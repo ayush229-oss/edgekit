@@ -834,6 +834,7 @@ def _call_chat(provider: str, api_key: str, system_prompt: str, history: List[Di
 
 
 def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict]) -> str:
+    import time
     try:
         from google import genai
         from google.genai import types
@@ -845,15 +846,33 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict]) -> 
     for m in history:
         role = "model" if m["role"] == "assistant" else "user"
         contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.4,
-        ),
-    )
-    return resp.text or ""
+
+    # Try gemini-2.5-flash first, fall back to gemini-2.0-flash on overload
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    last_err = None
+    for model in models_to_try:
+        for attempt in range(3):
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=0.4,
+                    ),
+                )
+                return resp.text or ""
+            except Exception as e:
+                last_err = e
+                err_str = str(e)
+                # Retry on 503/overload/resource exhausted
+                if any(x in err_str for x in ["503", "UNAVAILABLE", "overloaded", "resource_exhausted", "RESOURCE_EXHAUSTED"]):
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)  # 1s, 2s
+                        continue
+                    break  # try next model
+                raise  # non-retriable error — re-raise immediately
+    raise HTTPException(503, f"Gemini is currently overloaded. Please try again in a moment. ({last_err})")
 
 
 def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict]) -> str:
