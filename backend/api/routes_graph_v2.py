@@ -685,6 +685,11 @@ class ChatRequest(BaseModel):
     messages:  List[ChatMessage]
     symbol:    str = "XAUUSD"
     timeframe: str = "M15"
+    # When the user opens the chat from an existing strategy on the canvas, the
+    # current graph (and a short summary of its last backtest) are passed in so
+    # the assistant can EDIT it rather than start from scratch.
+    current_graph:  Optional[Dict[str, Any]] = None
+    result_summary: Optional[str] = None
 
 _CHAT_SYSTEM = """You are Edgekit's friendly trading strategy assistant. Your job is to help non-technical traders design a backtestable strategy through conversation — without them needing to know code, Python, or indicators.
 
@@ -769,6 +774,22 @@ def graph_chat(
         catalog=_json.dumps(catalog, separators=(",", ":")),
         graph_schema=graph_schema,
     )
+
+    # EDIT MODE: the user opened the chat from an existing strategy. Give the
+    # assistant the current graph + last result so it modifies that strategy
+    # instead of starting over.
+    if isinstance(req.current_graph, dict) and req.current_graph.get("nodes"):
+        edit_ctx = (
+            "\n\n--- EDIT MODE ---\n"
+            "The user already has this strategy on their canvas. When they ask for "
+            "changes, modify THIS graph and return the FULL updated graph (every node "
+            "and edge, not just the change) in the graph format. Keep node ids stable "
+            "where possible. Only ask a clarifying question if the request is ambiguous.\n"
+            f"CURRENT_GRAPH:\n{_json.dumps(req.current_graph, separators=(',', ':'))}"
+        )
+        if req.result_summary:
+            edit_ctx += f"\n\nLATEST BACKTEST RESULT: {req.result_summary.strip()}"
+        system_prompt = system_prompt + edit_ctx
 
     # Convert messages to format each provider needs
     history = [{"role": m.role, "content": m.content} for m in req.messages]

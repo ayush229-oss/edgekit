@@ -378,6 +378,8 @@ export async function v2Chat(body: {
   messages:  ChatMessage[];
   symbol?:   string;
   timeframe?: string;
+  current_graph?:  V2Graph | null;
+  result_summary?: string | null;
 }): Promise<ChatResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const ai = getUserAIKey();

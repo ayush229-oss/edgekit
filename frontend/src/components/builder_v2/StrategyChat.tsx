@@ -21,13 +21,20 @@ export function StrategyChat({
   onLoadGraph,
   symbol = "XAUUSD",
   timeframe = "M15",
+  currentGraph = null,
+  resultSummary = null,
 }: {
   open:        boolean;
   onClose:     () => void;
   onLoadGraph: (g: V2Graph, name: string) => void;
   symbol?:     string;
   timeframe?:  string;
+  /** When set, the chat edits this existing strategy instead of starting fresh. */
+  currentGraph?:  V2Graph | null;
+  /** Short summary of the strategy's last backtest, e.g. "0 trades". */
+  resultSummary?: string | null;
 }) {
+  const editing = !!(currentGraph && currentGraph.nodes && currentGraph.nodes.length > 0);
   const [messages,  setMessages]  = useState<ChatMessage[]>([]);
   const [input,     setInput]     = useState("");
   const [busy,      setBusy]      = useState(false);
@@ -48,7 +55,9 @@ export function StrategyChat({
       if (messages.length === 0) {
         setMessages([{
           role:    "assistant",
-          content: "Hey! Tell me about your trading idea in plain English — no jargon needed. For example: \"I want to buy gold when it breaks above a recent high and sell when it drops back below.\" What's your idea?",
+          content: editing
+            ? `I can see your current strategy${resultSummary ? ` (last backtest: ${resultSummary})` : ""}. Tell me what to change — e.g. "loosen it so it actually trades", "remove the AND condition", or "add a trend filter" — and I'll update it.`
+            : "Hey! Tell me about your trading idea in plain English — no jargon needed. For example: \"I want to buy gold when it breaks above a recent high and sell when it drops back below.\" What's your idea?",
         }]);
       }
     }
@@ -81,7 +90,11 @@ export function StrategyChat({
     setBusy(true);
 
     try {
-      const res = await v2Chat({ messages: next, symbol, timeframe });
+      const res = await v2Chat({
+        messages: next, symbol, timeframe,
+        current_graph:  editing ? currentGraph : null,
+        result_summary: editing ? resultSummary : null,
+      });
       if (res.type === "graph") {
         setGraph(res.graph);
         setMessages((m) => [
@@ -128,7 +141,7 @@ export function StrategyChat({
               <span className="text-[10px] uppercase tracking-widest text-money font-semibold">AI Strategy Builder</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-highlight text-highlightInk font-medium">Beta</span>
             </div>
-            <h2 className="text-[17px] font-semibold text-ink">Describe your strategy</h2>
+            <h2 className="text-[17px] font-semibold text-ink">{editing ? "Edit your strategy" : "Describe your strategy"}</h2>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <label className="flex items-center gap-1.5" title="Choose which AI model answers">

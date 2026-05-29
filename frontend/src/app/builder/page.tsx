@@ -653,6 +653,10 @@ function BuilderInner() {
         onLoadGraph={loadGraphFromDescriber}
         symbol={symbol}
         timeframe={tf}
+        currentGraph={nodes.length > 0 ? rfToGraph(nodes, edges, name) : null}
+        resultSummary={result
+          ? `${result.metrics.trades} trades, ${result.metrics.wr.toFixed(0)}% win rate, ${result.metrics.total_r >= 0 ? "+" : ""}${result.metrics.total_r.toFixed(1)}R`
+          : null}
       />
 
       {/* ── AI custom-node builder modal ───────────────────────────── */}
