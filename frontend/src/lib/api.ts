@@ -253,7 +253,26 @@ export type ChartPreview = {
   trades:    ChartTrade[];
   n_setups:  number;
   indicators?: ChartIndicator[];   // optional — server may omit on old builds
+  artifacts?:  ChartArtifact[];    // structural shapes: OB zones, FVG gaps, swept levels
   data_source?: DataSource;
+};
+
+// A structure the engine actually decided, for drawing on the chart.
+export type ChartArtifact = {
+  kind:        "zone" | "level" | "marker";
+  node_id?:    string;
+  node_type?:  string;
+  lane?:       string;
+  label?:      string;
+  color_hint?: "bull" | "bear" | "neutral";
+  // zone (rectangle): bar range + price band
+  from_idx?:   number;
+  to_idx?:     number;
+  price_hi?:   number;
+  price_lo?:   number;
+  // level / marker: single price at a bar
+  at_idx?:     number;
+  price?:      number;
 };
 
 export async function v2ChartPreview(body: any): Promise<ChartPreview> {

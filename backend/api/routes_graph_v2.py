@@ -59,11 +59,8 @@ _PRICE_OVERLAY_INDICATORS = {
         ("ichi_{tenkan_period}_{kijun_period}_{senkou_b_period}_a", "Senkou Span A",  "#16A34A", "solid", 1),
         ("ichi_{tenkan_period}_{kijun_period}_{senkou_b_period}_b", "Senkou Span B",  "#DC2626", "solid", 1),
     ],
-    "indicator.order_block":[
-        ("ob_{direction}_{scan_min}_{scan_max}_h", "OB High",   "#F59E0B", "dashed", 1),
-        ("ob_{direction}_{scan_min}_{scan_max}_m", "OB Mid",    "#F59E0B", "solid",  1),
-        ("ob_{direction}_{scan_min}_{scan_max}_l", "OB Low",    "#F59E0B", "dashed", 1),
-    ],
+    # NOTE: indicator.order_block is intentionally NOT here — it now renders as a
+    # shaded zone via the structural trace (see artifacts), not as three lines.
 }
 
 def _extract_indicators(strategy, df) -> List[Dict[str, Any]]:
@@ -376,6 +373,10 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
         except Exception:
             indicators = []
 
+        # Structural artifacts (OB zones, FVG gaps, swept levels) the engine
+        # actually decided — drawn as shapes, not guessed from param keys.
+        artifacts = list(getattr(getattr(strategy, "ctx", None), "trace", []) or [])
+
         return {
             "symbol":    req.symbol,
             "timeframe": req.timeframe,
@@ -384,6 +385,7 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
             "trades":    trades,
             "n_setups":  len(setups),
             "indicators": indicators,
+            "artifacts": artifacts,
             "data_source": data_source_of(df),
         }
     except Exception as e:

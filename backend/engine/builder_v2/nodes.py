@@ -41,6 +41,7 @@ class NodeSpec:
     params:      List[Dict[str, Any]]       = field(default_factory=list)
     prepare_fn:  Optional[Callable] = None    # (df, ctx, params) -> None  (cache fills)
     eval_fn:     Optional[Callable] = None    # see lane-specific signatures below
+    artifacts_fn: Optional[Callable] = None   # (df, ctx, params) -> List[dict]  (chart structures)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -59,9 +60,12 @@ NODE_LIBRARY: Dict[str, NodeSpec] = {}
 
 def _register(spec: NodeSpec):
     def deco(fns):
-        # fns may be (prepare, eval) or just eval
+        # fns may be (prepare, eval), (prepare, eval, artifacts), or just eval
         if isinstance(fns, tuple):
-            spec.prepare_fn, spec.eval_fn = fns
+            if len(fns) == 3:
+                spec.prepare_fn, spec.eval_fn, spec.artifacts_fn = fns
+            else:
+                spec.prepare_fn, spec.eval_fn = fns
         else:
             spec.eval_fn = fns
         NODE_LIBRARY[spec.type] = spec

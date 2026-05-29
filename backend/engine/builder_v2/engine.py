@@ -57,12 +57,23 @@ class GraphV2Strategy:
         # indicator series so the frontend can plot them as line overlays).
         self.ctx = ctx
 
-        # 1) prepare-phase: precompute indicator series + set warmup_bars
+        # 1) prepare-phase: precompute indicator series + set warmup_bars, then
+        #    collect any chart artifacts (zones/levels/markers) the node exposes.
         for nid in self._topo:
             n    = self.nodes[nid]
             spec = NODE_LIBRARY[n["type"]]
             if spec.prepare_fn:
                 spec.prepare_fn(df, ctx, n["params"])
+            if getattr(spec, "artifacts_fn", None):
+                try:
+                    for a in (spec.artifacts_fn(df, ctx, n["params"]) or []):
+                        a.setdefault("node_id", nid)
+                        a["node_type"] = n["type"]
+                        a["lane"]      = spec.lane
+                        ctx.trace.append(a)
+                except Exception:
+                    # Visualization must never break a backtest.
+                    pass
 
         setups: List[Dict[str, Any]] = []
         n_bars = len(df)

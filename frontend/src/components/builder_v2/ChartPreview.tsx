@@ -53,6 +53,74 @@ const C = {
 };
 
 
+// ── Structural-zone primitive ────────────────────────────────────────────
+// Draws the engine's actual decisions as shapes: filled OB / FVG rectangles
+// and dashed swept-liquidity level lines. Uses lightweight-charts' series
+// primitive API so shapes track pan/zoom precisely.
+type ZShape =
+  | { type: "rect";  t1: UTCTimestamp; t2: UTCTimestamp; hi: number; lo: number; fill: string; stroke: string }
+  | { type: "hline"; t1: UTCTimestamp; t2: UTCTimestamp; price: number; color: string };
+
+class ZonesPrimitive {
+  _chart: IChartApi | null = null;
+  _series: ISeriesApi<"Candlestick"> | null = null;
+  _requestUpdate?: () => void;
+  _shapes: ZShape[] = [];
+  _paneViews: any[];
+  constructor() { this._paneViews = [new ZonesPaneView(this)]; }
+  attached(p: any) { this._chart = p.chart; this._series = p.series; this._requestUpdate = p.requestUpdate; }
+  detached() { this._chart = null; this._series = null; }
+  updateAllViews() {}
+  paneViews() { return this._paneViews; }
+  setShapes(s: ZShape[]) { this._shapes = s; this._requestUpdate?.(); }
+}
+
+class ZonesPaneView {
+  constructor(private _src: ZonesPrimitive) {}
+  update() {}
+  renderer() { return new ZonesRenderer(this._src); }
+}
+
+class ZonesRenderer {
+  constructor(private _src: ZonesPrimitive) {}
+  draw(target: any) {
+    const { _chart: chart, _series: series, _shapes: shapes } = this._src;
+    if (!chart || !series) return;
+    const ts = chart.timeScale();
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx: CanvasRenderingContext2D = scope.context;
+      const hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
+      for (const s of shapes) {
+        const x1 = ts.timeToCoordinate(s.t1);
+        const x2 = ts.timeToCoordinate(s.t2);
+        if (x1 == null || x2 == null) continue;
+        if (s.type === "rect") {
+          const y1 = series.priceToCoordinate(s.hi);
+          const y2 = series.priceToCoordinate(s.lo);
+          if (y1 == null || y2 == null) continue;
+          const left = Math.min(x1, x2) * hr, right = Math.max(x1, x2) * hr;
+          const top  = Math.min(y1, y2) * vr, bot   = Math.max(y1, y2) * vr;
+          const h = Math.max(1, bot - top);
+          ctx.fillStyle = s.fill;   ctx.fillRect(left, top, right - left, h);
+          ctx.strokeStyle = s.stroke; ctx.lineWidth = 1 * hr;
+          ctx.strokeRect(left, top, right - left, h);
+        } else {
+          const y = series.priceToCoordinate(s.price);
+          if (y == null) continue;
+          ctx.strokeStyle = s.color; ctx.lineWidth = 1.5 * hr;
+          ctx.setLineDash([4 * hr, 3 * hr]);
+          ctx.beginPath();
+          ctx.moveTo(Math.min(x1, x2) * hr, y * vr);
+          ctx.lineTo(Math.max(x1, x2) * hr, y * vr);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+    });
+  }
+}
+
+
 // Compute target price from entry / sl / direction / target_r
 function tpPrice(tr: ChartTrade, targetR: number) {
   const r1 = Math.abs(tr.entry - tr.sl);
@@ -99,6 +167,9 @@ export function ChartPreview({
   // Strategy indicator lines (EMA, Donchian, Bollinger, etc.) — rebuilt with the chart
   const indicatorRefs = useRef<ISeriesApi<"Line">[]>([]);
 
+  // Structural-zone primitive (OB/FVG zones, swept levels)
+  const zonesPrimRef  = useRef<ZonesPrimitive | null>(null);
+
   // Per-selection price lines (cleared on each new selection)
   const selPriceLinesRef = useRef<IPriceLine[]>([]);
 
@@ -114,6 +185,7 @@ export function ChartPreview({
   const [showZones,      setShowZones]      = useState(true);
   const [showRibbon,     setShowRibbon]     = useState(false);
   const [showIndicators, setShowIndicators] = useState(true);
+  const [showStructures, setShowStructures] = useState(true);
 
   const TF_OPTIONS = ["M5", "M15", "M30", "H1", "H4", "D1"];
 
@@ -184,6 +256,13 @@ export function ChartPreview({
       }))
     );
     candlesRef.current = candles;
+
+    // Attach the structural-zone primitive (filled by the showStructures effect)
+    try {
+      const zp = new ZonesPrimitive();
+      (candles as any).attachPrimitive?.(zp);
+      zonesPrimRef.current = zp;
+    } catch { zonesPrimRef.current = null; }
 
     // ── Markers: small dots only — NO text labels (those go on selection) ──
     type M = {
@@ -258,6 +337,7 @@ export function ChartPreview({
       markersRef.current?.detach();
       markersRef.current   = null;
       candlesRef.current   = null;
+      zonesPrimRef.current = null;
       zoneEntryRef.current = null;
       zoneSLRef.current    = null;
       zoneTPRef.current    = null;
@@ -317,6 +397,46 @@ export function ChartPreview({
       indicatorRefs.current.push(series);
     }
   }, [data, showIndicators]);
+
+
+  // ── Structures: OB/FVG zones + swept-liquidity levels (the strategy trace) ──
+  useEffect(() => {
+    const zp = zonesPrimRef.current;
+    if (!zp || !data) return;
+    if (!showStructures || !data.artifacts || data.artifacts.length === 0) {
+      zp.setShapes([]);
+      return;
+    }
+    const bars = data.bars;
+    const shapes: ZShape[] = [];
+    for (const a of data.artifacts) {
+      if (a.kind === "zone" && a.from_idx != null && a.to_idx != null
+          && a.price_hi != null && a.price_lo != null) {
+        const b1 = bars[a.from_idx]; const b2 = bars[a.to_idx];
+        if (!b1 || !b2) continue;
+        const bull = a.color_hint !== "bear";
+        shapes.push({
+          type: "rect",
+          t1: b1.t as UTCTimestamp, t2: b2.t as UTCTimestamp,
+          hi: a.price_hi, lo: a.price_lo,
+          fill:   bull ? "rgba(107,155,122,0.10)" : "rgba(201,123,99,0.10)",
+          stroke: bull ? "rgba(107,155,122,0.55)" : "rgba(201,123,99,0.55)",
+        });
+      } else if (a.kind === "level" && a.at_idx != null && a.price != null) {
+        const b1 = bars[a.at_idx];
+        const b2 = bars[Math.min(bars.length - 1, a.at_idx + 15)];
+        if (!b1 || !b2) continue;
+        const bear = a.color_hint === "bear";
+        shapes.push({
+          type: "hline",
+          t1: b1.t as UTCTimestamp, t2: b2.t as UTCTimestamp,
+          price: a.price,
+          color: bear ? "rgba(201,123,99,0.9)" : "rgba(107,155,122,0.9)",
+        });
+      }
+    }
+    zp.setShapes(shapes);
+  }, [data, showStructures]);
 
 
   // ── Toggle 1: R/R zones (Entry / SL / TP segments for ALL trades) ────
@@ -526,6 +646,14 @@ export function ChartPreview({
 
           <div className="flex items-center gap-2 shrink-0">
             {/* Toggle pills */}
+            <button
+              onClick={() => setShowStructures((v) => !v)}
+              title="Show the structures the strategy uses — order-block zones, FVG gaps, swept liquidity levels"
+              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5
+                ${showStructures ? "bg-amber/25 border-amber/50 text-amber-900" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${showStructures ? "bg-amber" : "bg-muted"}`} />
+              Structures{data?.artifacts && data.artifacts.length > 0 ? ` (${data.artifacts.length})` : ""}
+            </button>
             <button
               onClick={() => setShowIndicators((v) => !v)}
               title="Show the strategy's indicators (EMA, Donchian, Bollinger, VWAP, etc.) on the chart"

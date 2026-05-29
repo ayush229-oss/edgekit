@@ -479,6 +479,42 @@ def _ob_eval(df, i, ctx, inputs, p):
         "entry":    entry_px,
     }
 
+def _ob_zone(a, b, h, l, direction):
+    return {
+        "kind": "zone",
+        "label": f"Order Block ({direction})",
+        "color_hint": "bull" if direction == "long" else "bear",
+        "from_idx": int(a), "to_idx": int(b),
+        "price_hi": float(h), "price_lo": float(l),
+    }
+
+def _ob_artifacts(df, ctx, p):
+    """Compress the per-bar OB high/low cache into distinct zone rectangles —
+    one box per order block, spanning the bars where it was the active OB."""
+    direction = p.get("direction", "long")
+    smin, smax = int(p["scan_min"]), int(p["scan_max"])
+    k = f"ob_{direction}_{smin}_{smax}"
+    hh = ctx.cache.get(k + "_h"); ll = ctx.cache.get(k + "_l")
+    if hh is None or ll is None:
+        return []
+    arts = []
+    n = len(hh)
+    start = None; cur_h = cur_l = None
+    for i in range(n):
+        h = float(hh[i]); l = float(ll[i])
+        if h <= 0 and l <= 0:                      # no OB established yet
+            if start is not None:
+                arts.append(_ob_zone(start, i - 1, cur_h, cur_l, direction)); start = None
+            continue
+        if start is None:
+            start, cur_h, cur_l = i, h, l
+        elif h != cur_h or l != cur_l:             # a fresh OB replaced the old one
+            arts.append(_ob_zone(start, i - 1, cur_h, cur_l, direction))
+            start, cur_h, cur_l = i, h, l
+    if start is not None:
+        arts.append(_ob_zone(start, n - 1, cur_h, cur_l, direction))
+    return arts[-40:]                              # cap to keep the chart readable
+
 _register(NodeSpec(
     type="indicator.order_block",
     lane="indicator",
@@ -498,7 +534,7 @@ _register(NodeSpec(
         {"key": "entry_ratio", "label": "Entry level (0=low, 0.5=mid, 1=high)",
          "type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
     ],
-))((_ob_prepare, _ob_eval))
+))((_ob_prepare, _ob_eval, _ob_artifacts))
 
 
 # Ichimoku Kinko Hyo — the 5-line Japanese system
@@ -672,6 +708,56 @@ def _alpha_fvg(df, i, ctx, inputs, p):
     if d in ("long", "both")  and L[i] - H[i-2] >= minpx: return {"insight": Insight(direction="Bull", bar_idx=i)}
     if d in ("short", "both") and L[i-2] - H[i] >= minpx: return {"insight": Insight(direction="Bear", bar_idx=i)}
     return {"insight": None}
+
+
+def _fvg_artifacts(df, ctx, p):
+    """Each 3-bar imbalance becomes a gap rectangle, drawn forward until it's
+    likely filled (~10 bars)."""
+    minpx = float(p["min_pips"]) * ctx.pip
+    H, L = df["H"].values, df["L"].values
+    d = p.get("direction", "both")
+    n = len(df); arts = []
+    for i in range(2, n):
+        if d in ("long", "both") and L[i] - H[i-2] >= minpx:
+            arts.append({"kind": "zone", "label": "FVG (bull)", "color_hint": "bull",
+                         "from_idx": i - 2, "to_idx": min(n - 1, i + 10),
+                         "price_hi": float(L[i]), "price_lo": float(H[i-2])})
+        elif d in ("short", "both") and L[i-2] - H[i] >= minpx:
+            arts.append({"kind": "zone", "label": "FVG (bear)", "color_hint": "bear",
+                         "from_idx": i - 2, "to_idx": min(n - 1, i + 10),
+                         "price_hi": float(L[i-2]), "price_lo": float(H[i])})
+    return arts[-60:]
+
+
+def _sweep_artifacts(df, ctx, p):
+    """Mark each swept liquidity level (the equal-high/low that got pierced)."""
+    lb = int(p["lookback"]); pip = ctx.pip
+    tol = float(p["tolerance_pips"]) * pip
+    min_pierce = float(p["min_pierce_pips"]) * pip
+    d = p.get("direction", "both")
+    H = df["H"].values; L = df["L"].values; C = df["C"].values
+    n = len(df); arts = []
+    for i in range(lb + 2, n):
+        win_H = H[i-lb:i]; win_L = L[i-lb:i]
+        if d in ("short", "both"):
+            top = win_H.max()
+            if int((np.abs(win_H - top) <= tol).sum()) >= int(p["count"]) \
+               and H[i] >= top + min_pierce and C[i] < top - tol:
+                arts.append({"kind": "level", "label": "Liquidity swept (highs)",
+                             "color_hint": "bear", "at_idx": i, "price": float(top)})
+                continue
+        if d in ("long", "both"):
+            bot = win_L.min()
+            if int((np.abs(win_L - bot) <= tol).sum()) >= int(p["count"]) \
+               and L[i] <= bot - min_pierce and C[i] > bot + tol:
+                arts.append({"kind": "level", "label": "Liquidity swept (lows)",
+                             "color_hint": "bull", "at_idx": i, "price": float(bot)})
+    return arts[-40:]
+
+
+# Attach artifact emitters to the decorator-registered alpha nodes.
+NODE_LIBRARY["alpha.fvg"].artifacts_fn = _fvg_artifacts
+NODE_LIBRARY["alpha.liquidity_sweep"].artifacts_fn = _sweep_artifacts
 
 
 @_register(NodeSpec(

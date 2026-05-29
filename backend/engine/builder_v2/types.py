@@ -117,3 +117,8 @@ class RunContext:
     cache: Dict[str, Any] = field(default_factory=dict)
     # Stateful per-node slots (e.g. cooldown last-fired bar)
     state: Dict[str, Any] = field(default_factory=dict)
+    # Visual trace: structural artifacts (zones / levels / markers) emitted by
+    # nodes so the chart can DRAW what the engine actually decided — order-block
+    # zones, FVG gaps, swept levels, etc. Each entry is a JSON-able dict tagged
+    # with node_id / node_type / lane by the engine.
+    trace: List[Dict[str, Any]] = field(default_factory=list)
