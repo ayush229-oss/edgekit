@@ -20,7 +20,7 @@
  * Backtest semantics: every change is a fresh full backtest (no caching). The
  * Run button glows sage when results are stale.
  */
-import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import ReactFlow, {
@@ -387,6 +387,58 @@ function BuilderInner() {
     setSelectedId(id);
   }
 
+  // ── Undo / redo memory ─────────────────────────────────────────────────
+  // Snapshots of the canvas are recorded shortly after the graph settles, so a
+  // drag or a multi-step edit collapses into a single undo step. Refs hold the
+  // stacks (no re-render on push); histVer bumps only to refresh button state.
+  const historyRef  = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  const futureRef   = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  const lastSnapRef = useRef<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
+  const applyingRef = useRef(false);   // true while undo/redo is applying (skip recording)
+  const initedRef   = useRef(false);
+  const [, setHistVer] = useState(0);   // bump only to refresh undo/redo button state
+
+  useEffect(() => {
+    if (!initedRef.current) {
+      initedRef.current = true;
+      lastSnapRef.current = { nodes, edges };
+      return;
+    }
+    if (applyingRef.current) {
+      applyingRef.current = false;
+      lastSnapRef.current = { nodes, edges };
+      return;
+    }
+    const t = setTimeout(() => {
+      historyRef.current.push(lastSnapRef.current);
+      if (historyRef.current.length > 60) historyRef.current.shift();
+      futureRef.current = [];
+      lastSnapRef.current = { nodes, edges };
+      setHistVer((v) => v + 1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [nodes, edges]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  function undo() {
+    if (historyRef.current.length === 0) return;
+    const prev = historyRef.current.pop()!;
+    futureRef.current.push(lastSnapRef.current);
+    applyingRef.current = true;
+    lastSnapRef.current = prev;
+    setNodes(prev.nodes); setEdges(prev.edges); setSelectedId(null);
+    setHistVer((v) => v + 1);
+  }
+
+  function redo() {
+    if (futureRef.current.length === 0) return;
+    const nxt = futureRef.current.pop()!;
+    historyRef.current.push(lastSnapRef.current);
+    applyingRef.current = true;
+    lastSnapRef.current = nxt;
+    setNodes(nxt.nodes); setEdges(nxt.edges); setSelectedId(null);
+    setHistVer((v) => v + 1);
+  }
+
   // Keyboard: Delete / Backspace to remove selected node — ignored while typing in inputs.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -397,6 +449,12 @@ function BuilderInner() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "d" && selectedId) {
         e.preventDefault(); duplicateSelected();
+      }
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && k === "z" && !e.shiftKey) {
+        e.preventDefault(); undo();
+      } else if ((e.ctrlKey || e.metaKey) && (k === "y" || (k === "z" && e.shiftKey))) {
+        e.preventDefault(); redo();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -660,6 +718,20 @@ function BuilderInner() {
           onChange={(e) => setBars(parseInt(e.target.value || "5000"))}
           className="text-xs rounded bg-cream border border-border px-2 py-1 w-20" />
         <ComplexityMeter c={complex} />
+
+        {/* Undo / redo */}
+        <div className="flex items-center gap-1">
+          <button onClick={undo} disabled={historyRef.current.length === 0}
+            title="Undo (Ctrl+Z)"
+            className="text-xs px-2.5 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40">
+            ↶ Undo
+          </button>
+          <button onClick={redo} disabled={futureRef.current.length === 0}
+            title="Redo (Ctrl+Shift+Z)"
+            className="text-xs px-2.5 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40">
+            ↷ Redo
+          </button>
+        </div>
 
         {/* Save strategy button */}
         <button
