@@ -2,7 +2,8 @@
 Local dev uses SQLite; production swaps to Postgres via DATABASE_URL env var."""
 
 from .session import get_db, init_db, engine, SessionLocal
-from .models  import User, SavedStrategy, BacktestRun, WaitlistEntry, Tier, ForwardTest
+from .models  import User, SavedStrategy, BacktestRun, WaitlistEntry, Tier, ForwardTest, LiveTrade
 
 __all__ = ["get_db", "init_db", "engine", "SessionLocal",
-           "User", "SavedStrategy", "BacktestRun", "WaitlistEntry", "Tier", "ForwardTest"]
+           "User", "SavedStrategy", "BacktestRun", "WaitlistEntry", "Tier",
+           "ForwardTest", "LiveTrade"]

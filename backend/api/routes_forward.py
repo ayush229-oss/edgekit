@@ -162,7 +162,8 @@ def start_forward_scheduler() -> None:
                 try:
                     active = db.query(ForwardTest).filter(ForwardTest.status == "active").all()
                     for ft in active:
-                        _refresh(ft, db)
+                        if _mode(ft) == "sim":     # live tests are driven by the executor
+                            _refresh(ft, db)
                 finally:
                     db.close()
             except Exception:
@@ -178,8 +179,45 @@ class ForwardStartRequest(BaseModel):
     name:      str = ""
     symbol:    str = "XAUUSD"
     timeframe: str = "M15"
+    mode:      str = "sim"     # "sim" = paper recompute | "live_demo" = real demo execution
     mgmt:      Dict[str, Any] = Field(default_factory=dict)
     baseline:  Dict[str, Any] = Field(default_factory=dict)   # backtest metrics for comparison
+
+
+def _mode(ft: ForwardTest) -> str:
+    return (ft.mgmt or {}).get("mode", "sim")
+
+
+def _live_rollup(ft: ForwardTest, db: Session) -> Dict[str, Any]:
+    """Build the live (Grade-3) snapshot from the immutable ledger — real money,
+    real costs. Never recomputed from price history; read straight from fills."""
+    from backend.db import LiveTrade
+    rows = db.query(LiveTrade).filter(LiveTrade.forward_test_id == ft.id).order_by(LiveTrade.ts).all()
+    opens  = [r for r in rows if r.action == "open"]
+    closes = [r for r in rows if r.action == "close"]
+    n      = len(closes)
+    wins   = [r for r in closes if r.profit > 0]
+    total_profit = float(sum(r.profit for r in closes))
+    return {
+        "mode": "live_demo",
+        "metrics": {
+            "trades":        n,
+            "wr":            (len(wins) / n * 100.0) if n else 0.0,
+            "total_profit":  total_profit,
+            "open_positions": max(0, len(opens) - len(closes)),
+        },
+        "costs": {
+            "total_spread":   float(sum(r.spread for r in opens)),
+            "total_slippage": float(sum(abs(r.slippage) for r in opens)),
+        },
+        "trades": [{
+            "side": r.side, "fill_price": r.fill_price, "profit": r.profit,
+            "spread": r.spread, "slippage": r.slippage,
+            "time": r.ts.isoformat() if r.ts else None,
+        } for r in closes[-100:]],
+        "events":     len(rows),
+        "last_run":   rows[-1].ts.isoformat() if rows else None,
+    }
 
 
 def _user_id(db: Session, x_dev_user: Optional[str], authorization: Optional[str]) -> Optional[int]:
@@ -191,18 +229,22 @@ def _user_id(db: Session, x_dev_user: Optional[str], authorization: Optional[str
         return None
 
 
-def _summary(ft: ForwardTest) -> Dict[str, Any]:
+def _summary(ft: ForwardTest, db: Optional[Session] = None) -> Dict[str, Any]:
+    mode = _mode(ft)
+    # Live tests read straight from the immutable ledger; sim tests use the stored snapshot.
+    latest = (_live_rollup(ft, db) if (mode == "live_demo" and db is not None) else (ft.latest or {}))
     return {
         "id":         ft.id,
         "name":       ft.name,
         "symbol":     ft.symbol,
         "timeframe":  ft.timeframe,
+        "mode":       mode,
         "status":     ft.status,
         "started_at": ft.started_at.isoformat() if ft.started_at else None,
         "created_at": ft.created_at.isoformat() if ft.created_at else None,
         "updated_at": ft.updated_at.isoformat() if ft.updated_at else None,
         "baseline":   ft.baseline or {},
-        "latest":     ft.latest or {},
+        "latest":     latest,
     }
 
 
@@ -221,21 +263,24 @@ def forward_start(
     except Exception as e:
         raise HTTPException(422, f"Strategy isn't valid yet: {e}")
 
+    mode = "live_demo" if req.mode == "live_demo" else "sim"
+    mgmt = {**(req.mgmt or {}), "mode": mode}
     ft = ForwardTest(
         user_id    = _user_id(db, x_dev_user, authorization),
         name       = (req.name or req.graph.get("name") or "Forward test").strip()[:160],
         symbol     = req.symbol,
         timeframe  = req.timeframe,
         graph      = req.graph,
-        mgmt       = req.mgmt or {},
+        mgmt       = mgmt,
         baseline   = req.baseline or {},
         started_at = datetime.utcnow(),
         status     = "active",
         latest     = {},
     )
     db.add(ft); db.commit(); db.refresh(ft)
-    _refresh(ft, db)          # run once immediately (likely 0 forward trades yet)
-    return _summary(ft)
+    if mode == "sim":
+        _refresh(ft, db)      # paper recompute once (live tests are driven by the executor)
+    return _summary(ft, db)
 
 
 @router.get("/list")
@@ -248,7 +293,7 @@ def forward_list(
     q = db.query(ForwardTest)
     q = q.filter(ForwardTest.user_id == uid) if uid is not None else q.filter(ForwardTest.user_id.is_(None))
     rows = q.order_by(ForwardTest.created_at.desc()).all()
-    return [_summary(ft) for ft in rows]
+    return [_summary(ft, db) for ft in rows]
 
 
 @router.get("/{ft_id}")
@@ -256,7 +301,7 @@ def forward_get(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     ft = db.get(ForwardTest, ft_id)
     if not ft:
         raise HTTPException(404, "Forward test not found.")
-    return _summary(ft)
+    return _summary(ft, db)
 
 
 @router.post("/{ft_id}/refresh")
@@ -264,8 +309,9 @@ def forward_refresh(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]
     ft = db.get(ForwardTest, ft_id)
     if not ft:
         raise HTTPException(404, "Forward test not found.")
-    _refresh(ft, db)
-    return _summary(ft)
+    if _mode(ft) == "sim":
+        _refresh(ft, db)
+    return _summary(ft, db)
 
 
 @router.post("/{ft_id}/stop")
@@ -275,4 +321,82 @@ def forward_stop(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
         raise HTTPException(404, "Forward test not found.")
     ft.status = "stopped"
     db.add(ft); db.commit()
-    return _summary(ft)
+    return _summary(ft, db)
+
+
+# ─── Executor-facing endpoints (host worker ↔ VPS) ──────────────────────────
+# The live executor runs on the MT5 host. It authenticates with the shared
+# bridge secret (both ends already have it).
+import os as _os
+
+def _check_executor(token: Optional[str]) -> None:
+    expected = _os.environ.get("BRIDGE_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(503, "Executor auth not configured on the server.")
+    if not token or token != expected:
+        raise HTTPException(401, "Invalid executor token.")
+
+
+class LiveEvent(BaseModel):
+    action:          str            # "open" | "close"
+    symbol:          str = ""
+    side:            str = ""
+    volume:          float = 0.0
+    requested_price: float = 0.0
+    fill_price:      float = 0.0
+    slippage:        float = 0.0
+    spread:          float = 0.0
+    sl:              float = 0.0
+    tp:              float = 0.0
+    ticket:          int = 0
+    profit:          float = 0.0
+    comment:         str = ""
+
+
+@router.get("/live/active")
+def live_active(x_executor_token: Optional[str] = Header(default=None, alias="X-Executor-Token"),
+                db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+    """Configs the executor needs: active Grade-3 (live_demo) tests."""
+    _check_executor(x_executor_token)
+    rows = db.query(ForwardTest).filter(ForwardTest.status == "active").all()
+    out = []
+    for ft in rows:
+        if _mode(ft) != "live_demo":
+            continue
+        out.append({
+            "id": ft.id, "symbol": ft.symbol, "timeframe": ft.timeframe,
+            "graph": ft.graph, "mgmt": ft.mgmt or {},
+            "started_at": ft.started_at.isoformat() if ft.started_at else None,
+        })
+    return out
+
+
+@router.post("/{ft_id}/event")
+def live_event(ft_id: int, ev: LiveEvent,
+               x_executor_token: Optional[str] = Header(default=None, alias="X-Executor-Token"),
+               db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Append a real fill to the immutable ledger (open or close)."""
+    _check_executor(x_executor_token)
+    from backend.db import LiveTrade
+    ft = db.get(ForwardTest, ft_id)
+    if not ft:
+        raise HTTPException(404, "Forward test not found.")
+    row = LiveTrade(
+        forward_test_id = ft_id,
+        ts              = datetime.utcnow(),
+        action          = ev.action[:8],
+        symbol          = ev.symbol[:32],
+        side            = ev.side[:8],
+        volume          = ev.volume,
+        requested_price = ev.requested_price,
+        fill_price      = ev.fill_price,
+        slippage        = ev.slippage,
+        spread          = ev.spread,
+        sl              = ev.sl,
+        tp              = ev.tp,
+        ticket          = ev.ticket,
+        profit          = ev.profit,
+        comment         = ev.comment[:64],
+    )
+    db.add(row); db.commit()
+    return {"ok": True, "id": row.id}

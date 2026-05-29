@@ -13,7 +13,8 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from sqlalchemy import (
-    Column, Integer, String, DateTime, JSON, ForeignKey, Enum as SAEnum, Text,
+    Column, Integer, BigInteger, Float, String, DateTime, JSON, ForeignKey,
+    Enum as SAEnum, Text,
 )
 from sqlalchemy.orm import relationship
 from .session import Base
@@ -85,6 +86,29 @@ class ForwardTest(Base):
     latest      = Column(JSON, default=dict, nullable=False)    # {metrics, trades, equity, bars_seen, last_run}
     created_at  = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class LiveTrade(Base):
+    """Append-only ledger for Grade-3 (demo-execution) forward tests. Each row is
+    a real order event with the ACTUAL fill — written once, never updated, so the
+    record can't drift and can be trusted/verified."""
+    __tablename__ = "live_trades"
+    id              = Column(Integer, primary_key=True)
+    forward_test_id = Column(Integer, index=True, nullable=False)
+    ts              = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    action          = Column(String(8),  default="open")    # open | close
+    symbol          = Column(String(32), default="")
+    side            = Column(String(8),  default="")         # buy | sell
+    volume          = Column(Float,   default=0.0)
+    requested_price = Column(Float,   default=0.0)
+    fill_price      = Column(Float,   default=0.0)
+    slippage        = Column(Float,   default=0.0)
+    spread          = Column(Float,   default=0.0)
+    sl              = Column(Float,   default=0.0)
+    tp              = Column(Float,   default=0.0)
+    ticket          = Column(BigInteger, default=0)
+    profit          = Column(Float,   default=0.0)           # realized, on close
+    comment         = Column(String(64), default="")
 
 
 class WaitlistEntry(Base):
