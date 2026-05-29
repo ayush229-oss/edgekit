@@ -463,20 +463,26 @@ export async function v2RunBacktest(body: any): Promise<BacktestResponse> {
 
 // ─── Forward (paper) testing ──────────────────────────────────────────────
 export type ForwardMetrics = {
-  trades: number; wr: number; ev: number; total_r: number;
-  profit_factor: number; max_dd: number; final_equity: number;
+  trades: number; wr: number; ev?: number; total_r?: number;
+  profit_factor?: number; max_dd?: number; final_equity?: number;
+  // live (Grade-3) only:
+  total_profit?: number; open_positions?: number;
 };
 export type ForwardLatest = {
+  mode?:    "sim" | "live_demo";
   metrics?: ForwardMetrics;
-  trades?:  Array<{ direction: string; entry: number; sl: number; result: string; exit_type: string; pnl_r: number; time: string | null }>;
+  costs?:   { total_spread?: number; total_slippage?: number };
+  trades?:  any[];
   equity?:  number[];
   bars_seen?: number;
   data_source?: DataSource;
   last_run?: string;
   error?: string;
+  events?: number;
 };
 export type ForwardTest = {
   id: number; name: string; symbol: string; timeframe: string; status: string;
+  mode?: "sim" | "live_demo";
   started_at?: string; created_at?: string; updated_at?: string;
   baseline?: Record<string, any>;
   latest?: ForwardLatest;
@@ -484,6 +490,7 @@ export type ForwardTest = {
 
 export async function forwardStart(body: {
   graph: V2Graph; name?: string; symbol?: string; timeframe?: string;
+  mode?: "sim" | "live_demo";
   mgmt?: Record<string, any>; baseline?: Record<string, any>;
 }): Promise<ForwardTest> {
   const r = await fetch(`${API_URL}/forward/start`, {

@@ -586,13 +586,13 @@ function BuilderInner() {
   }
 
   // ── Start a forward (paper) test from the current strategy ───────────────
-  async function startForwardTest() {
+  async function startForwardTest(mode: "sim" | "live_demo" = "sim") {
     if (nodes.length === 0) return;
-    setFwdMsg("Starting…");
+    setFwdMsg(mode === "live_demo" ? "Starting live demo test…" : "Starting…");
     try {
       await forwardStart({
         graph: rfToGraph(nodes, edges, name),
-        name, symbol, timeframe: tf,
+        name, symbol, timeframe: tf, mode,
         mgmt: {
           target_r:         mgmt.target_r,
           target_close_pct: mgmt.target_close_pct,
@@ -1086,12 +1086,20 @@ function BuilderInner() {
           )}
           {fwdMsg && <span className="text-[11px] text-sage ml-auto shrink-0">{fwdMsg}</span>}
           {nodes.length > 0 && (
-            <button
-              onClick={startForwardTest}
-              title="Track this strategy live on fresh bars (paper trading)"
-              className={`${fwdMsg ? "" : "ml-auto"} text-xs px-2.5 py-0.5 rounded bg-sky-100 text-sky-900 hover:bg-sky-200 transition-colors font-medium shrink-0`}>
-              🧪 Forward test
-            </button>
+            <>
+              <button
+                onClick={() => startForwardTest("sim")}
+                title="Paper forward test — recomputes on fresh bars (no real execution)"
+                className={`${fwdMsg ? "" : "ml-auto"} text-xs px-2.5 py-0.5 rounded bg-sky-100 text-sky-900 hover:bg-sky-200 transition-colors font-medium shrink-0`}>
+                🧪 Paper
+              </button>
+              <button
+                onClick={() => startForwardTest("live_demo")}
+                title="Live demo forward test — places real orders on your MT5 demo account to measure true spread, slippage & commission"
+                className="text-xs px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-900 hover:bg-emerald-200 transition-colors font-medium shrink-0">
+                🔴 Live (demo)
+              </button>
+            </>
           )}
           {result && (
             <button

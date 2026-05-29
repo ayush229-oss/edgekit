@@ -102,6 +102,8 @@ export default function ForwardPage() {
             const seen = t.latest?.bars_seen ?? 0;
             const noTrades = (fwd?.trades ?? 0) === 0;
             const ds = t.latest?.data_source?.label;
+            const isLive = t.mode === "live_demo";
+            const costs = t.latest?.costs;
             return (
               <div key={t.id} className="rounded-xl border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-2 mb-2">
@@ -112,10 +114,16 @@ export default function ForwardPage() {
                       {ds ? <> · <span className={t.latest?.data_source?.provider === "mt5" ? "text-emerald-600" : "text-amber-600"}>{ds}</span></> : null}
                     </div>
                   </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                    t.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-surface2 text-muted"}`}>
-                    {t.status}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      isLive ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"}`}>
+                      {isLive ? "🔴 live demo" : "🧪 paper"}
+                    </span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      t.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-surface2 text-muted"}`}>
+                      {t.status}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="text-[11px] text-muted mb-2">
@@ -132,16 +140,33 @@ export default function ForwardPage() {
                   <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-wide text-muted pb-1 border-b border-border">
                     <span>Metric</span><span className="text-right">Backtest</span><span className="text-right">Forward</span>
                   </div>
-                  <Row label="Trades"        base={base.trades}        fwd={fwd?.trades}        kind="num" />
-                  <Row label="Win rate"      base={base.wr}            fwd={fwd?.wr}            kind="pct" />
-                  <Row label="Total R"       base={base.total_r}       fwd={fwd?.total_r}       kind="r" />
-                  <Row label="Profit factor" base={base.profit_factor} fwd={fwd?.profit_factor} kind="pf" />
-                  <Row label="Max drawdown"  base={base.max_dd}        fwd={fwd?.max_dd}        kind="r" />
+                  <Row label="Trades"   base={base.trades} fwd={fwd?.trades} kind="num" />
+                  <Row label="Win rate" base={base.wr}     fwd={fwd?.wr}     kind="pct" />
+                  {isLive ? (
+                    <Row label="Net profit ($)" base={undefined} fwd={fwd?.total_profit} kind="r" />
+                  ) : (
+                    <>
+                      <Row label="Total R"       base={base.total_r}       fwd={fwd?.total_r}       kind="r" />
+                      <Row label="Profit factor" base={base.profit_factor} fwd={fwd?.profit_factor} kind="pf" />
+                      <Row label="Max drawdown"  base={base.max_dd}        fwd={fwd?.max_dd}        kind="r" />
+                    </>
+                  )}
                 </div>
+
+                {isLive && costs && (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                    <span className="font-medium">Real costs paid</span> — the part backtests ignore:
+                    spread <span className="font-mono">${(costs.total_spread ?? 0).toFixed(2)}</span>,
+                    slippage <span className="font-mono">${(costs.total_slippage ?? 0).toFixed(2)}</span>
+                    {(fwd?.open_positions ?? 0) > 0 ? <> · <span className="font-mono">{fwd?.open_positions} open</span></> : null}
+                  </div>
+                )}
 
                 {noTrades && (
                   <div className="text-[12px] text-muted italic mt-2">
-                    No forward trades yet — results appear as new bars form and the strategy triggers.
+                    {isLive
+                      ? "No live trades yet — the executor opens a demo order when your strategy next signals (MT5 host must be running)."
+                      : "No forward trades yet — results appear as new bars form and the strategy triggers."}
                   </div>
                 )}
 
