@@ -35,6 +35,13 @@ export type BacktestMetrics = {
   exit_counts: Record<string, number>;
 };
 
+export type DataSource = {
+  provider?: string;   // "mt5" | "yahoo" | "unknown"
+  via?:      string;   // "terminal" | "bridge" | "fallback"
+  symbol?:   string;
+  label?:    string;   // e.g. "MT5 · XAUUSD" or "Yahoo (fallback) · GC=F"
+};
+
 export type BacktestResponse = {
   strategy_id: string;
   data_range: [string, string];
@@ -44,6 +51,7 @@ export type BacktestResponse = {
   equity_curve: number[];
   pnl_series:   number[];
   issues: Record<string, any>;
+  data_source?: DataSource;
 };
 
 export async function listStrategies(): Promise<StrategySummary[]> {
@@ -245,6 +253,7 @@ export type ChartPreview = {
   trades:    ChartTrade[];
   n_setups:  number;
   indicators?: ChartIndicator[];   // optional — server may omit on old builds
+  data_source?: DataSource;
 };
 
 export async function v2ChartPreview(body: any): Promise<ChartPreview> {

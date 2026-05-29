@@ -60,3 +60,31 @@ def require_node_builder(user: User = Depends(current_user)) -> User:
         raise HTTPException(403,
             "Visual node builder is a Pro feature.")
     return user
+
+
+# ── Server-paid AI cost guard ────────────────────────────────────────────────
+# When a user hasn't brought their own key, Edgekit answers with Claude on the
+# server's bill. This is a lightweight in-process per-identity/day cap to prevent
+# runaway spend. It resets on restart (it's a guard, not a billing ledger); move
+# to a DB-backed counter if precise accounting is needed later.
+import os as _os
+
+_AI_USAGE: dict[tuple, int] = {}
+SERVER_AI_DAILY_CAP = int(_os.environ.get("SERVER_AI_DAILY_CAP", "40"))
+
+
+def enforce_ai_quota(identity: str, cap: int = SERVER_AI_DAILY_CAP) -> None:
+    """Raise 429 once `identity` has used `cap` server-paid AI calls today."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    key = (identity or "anon", today)
+    used = _AI_USAGE.get(key, 0)
+    if used >= cap:
+        raise HTTPException(
+            429,
+            "You've hit today's limit on the free Claude assistant. Add your own "
+            "AI key under Resources → AI Model to keep going, or try again tomorrow.",
+        )
+    _AI_USAGE[key] = used + 1
+    if len(_AI_USAGE) > 5000:   # prune stale days
+        for k in [k for k in _AI_USAGE if k[1] != today]:
+            _AI_USAGE.pop(k, None)

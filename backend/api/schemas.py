@@ -96,6 +96,8 @@ class BacktestResponse(BaseModel):
     equity_curve: List[float]
     pnl_series:   List[float]
     issues:       dict[str, Any] = Field(default_factory=dict)
+    # Which data actually fed the run, e.g. {"provider":"mt5","label":"MT5 · XAUUSD"}.
+    data_source:  dict[str, Any] = Field(default_factory=dict)
 
 
 # ─── CSV upload ──────────────────────────────────────────────────────────────

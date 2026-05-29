@@ -472,6 +472,18 @@ export function ChartPreview({
         <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-3 flex-wrap">
             <span className="font-semibold text-sm">{symbol}</span>
+            {data?.data_source?.label && (
+              <span
+                title="The data source actually used for this run"
+                className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${
+                  data.data_source.provider === "mt5"
+                    ? "bg-sage/15 border-sage/40 text-sage"
+                    : "bg-amber/25 border-amber/50 text-amber-900"
+                }`}
+              >
+                {data.data_source.provider === "mt5" ? "● " : "⚠ "}{data.data_source.label}
+              </span>
+            )}
             {/* Timeframe switcher */}
             <div className="flex items-center gap-0.5 bg-cream rounded-lg border border-border p-0.5">
               {TF_OPTIONS.map((tf) => (

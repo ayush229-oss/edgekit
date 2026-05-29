@@ -161,14 +161,14 @@ export function StrategyChat({
           </div>
         </div>
 
-        {/* No AI key warning */}
+        {/* Using the free built-in Claude (no user key set) */}
         {!hasKey && (
-          <div className="mx-5 mt-3 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-            No AI key set —{" "}
+          <div className="mx-5 mt-3 shrink-0 rounded-lg border border-sage/30 bg-sage/10 px-3 py-2 text-[12px] text-ink/80">
+            Using Edgekit's built-in <strong>Claude</strong> assistant — free, with a daily limit.{" "}
             <Link href="/resources" className="underline font-medium" onClick={close}>
-              add one on the Resources page
+              Add your own AI key
             </Link>{" "}
-            to use this feature.
+            for unlimited use.
           </div>
         )}
 
@@ -256,13 +256,13 @@ export function StrategyChat({
               onKeyDown={handleKey}
               rows={2}
               placeholder="Type your answer… (Enter to send)"
-              disabled={busy || !hasKey}
+              disabled={busy}
               className="flex-1 rounded-xl bg-paper border border-border px-3 py-2.5 text-[13.5px] resize-none
                          focus:outline-none focus:ring-1 focus:ring-money disabled:opacity-50 leading-relaxed"
             />
             <button
               onClick={send}
-              disabled={!input.trim() || busy || !hasKey}
+              disabled={!input.trim() || busy}
               className="px-4 py-2.5 rounded-xl bg-money text-white text-[13px] font-medium
                          hover:bg-moneyDark transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >

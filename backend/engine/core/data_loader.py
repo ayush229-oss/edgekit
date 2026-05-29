@@ -127,19 +127,83 @@ def validate_ohlcv(df: pd.DataFrame) -> dict:
     return issues
 
 
-def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
-    """Fetch bars from a connected MT5 terminal (Windows only).
-    On Linux / non-Windows systems, falls back to yfinance automatically.
-    """
-    import sys
-    if sys.platform != "win32":
-        return _load_yfinance(symbol, timeframe, n_bars)
+# ─── Data-source caching ────────────────────────────────────────────────────
+# Bars are cached briefly per (symbol, timeframe, n_bars) so repeated runs don't
+# re-hit the MT5 bridge / Yahoo, and so a momentarily-offline bridge still serves
+# the last good data. Each cached frame keeps its data_source label in .attrs.
+_BARS_CACHE: dict[tuple, tuple[float, pd.DataFrame]] = {}
+_BARS_TTL = float(__import__("os").environ.get("BARS_CACHE_TTL", "120"))
 
-    try:
-        import MetaTrader5 as mt5
-    except ImportError:
-        # MT5 package missing even on Windows — try yfinance
-        return _load_yfinance(symbol, timeframe, n_bars)
+
+def _set_source(df: pd.DataFrame, provider: str, via: str, symbol: str, label: str) -> pd.DataFrame:
+    """Tag a frame with the data source that produced it (read by the API/UI)."""
+    df.attrs["data_source"] = {"provider": provider, "via": via, "symbol": symbol, "label": label}
+    return df
+
+
+def data_source_of(df: pd.DataFrame) -> dict:
+    """Read the data-source label off a frame (set by the loaders)."""
+    src = getattr(df, "attrs", {}).get("data_source")
+    return dict(src) if src else {"provider": "unknown", "via": "", "symbol": "", "label": "Unknown"}
+
+
+def _cache_get(key: tuple) -> Optional[pd.DataFrame]:
+    import time
+    hit = _BARS_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _BARS_TTL:
+        df = hit[1]
+        out = df.copy()
+        out.attrs = dict(df.attrs)   # .copy() doesn't reliably carry attrs
+        return out
+    return None
+
+
+def _cache_put(key: tuple, df: pd.DataFrame) -> None:
+    import time
+    stored = df.copy()
+    stored.attrs = dict(df.attrs)
+    _BARS_CACHE[key] = (time.time(), stored)
+    if len(_BARS_CACHE) > 64:   # bound memory on the 512 MB box
+        oldest = min(_BARS_CACHE.items(), key=lambda kv: kv[1][0])[0]
+        _BARS_CACHE.pop(oldest, None)
+
+
+def load_bridge(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
+    """Fetch bars from the MT5 bridge running on the user's Windows PC.
+
+    Configured via env on the VPS: BRIDGE_URL (tunnel hostname) + BRIDGE_TOKEN.
+    Raises if the bridge isn't configured or is unreachable so the caller can
+    fall back to yfinance.
+    """
+    import os
+    import httpx
+    url   = os.environ.get("BRIDGE_URL", "").strip()
+    token = os.environ.get("BRIDGE_TOKEN", "").strip()
+    if not url:
+        raise RuntimeError("BRIDGE_URL not configured")
+
+    r = httpx.get(
+        f"{url.rstrip('/')}/bars",
+        params={"symbol": symbol, "timeframe": timeframe, "n_bars": n_bars},
+        headers={"X-Bridge-Token": token},
+        timeout=httpx.Timeout(30.0),
+    )
+    r.raise_for_status()
+    payload = r.json()
+    recs = payload.get("bars") or []
+    if not recs:
+        raise RuntimeError("bridge returned no bars")
+
+    df = pd.DataFrame(recs)
+    df["time"] = pd.to_datetime(df["time"])
+    keep = [c for c in ("time", "O", "H", "L", "C", "V") if c in df.columns]
+    df = df[keep].reset_index(drop=True)
+    return _set_source(df, "mt5", "bridge", symbol, f"MT5 · {symbol}")
+
+
+def _load_mt5_terminal(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
+    """Fetch bars directly from a connected MT5 terminal (Windows only)."""
+    import MetaTrader5 as mt5
 
     tf_map = {
         "M1":  mt5.TIMEFRAME_M1,
@@ -164,7 +228,43 @@ def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
     df["time"] = pd.to_datetime(df["time"], unit="s")
     df = df.rename(columns={"open": "O", "high": "H", "low": "L", "close": "C",
                             "tick_volume": "V"})
-    return df[["time", "O", "H", "L", "C", "V"]]
+    df = df[["time", "O", "H", "L", "C", "V"]]
+    return _set_source(df, "mt5", "terminal", symbol, f"MT5 · {symbol}")
+
+
+def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
+    """Resolve real bars for a symbol/timeframe, with caching + fallbacks.
+
+    Resolution order:
+      • Windows (dev): local MT5 terminal.
+      • Linux (VPS):   MT5 bridge (user's PC) → yfinance fallback (clearly labeled).
+    The returned frame carries its origin in ``df.attrs['data_source']`` so the
+    API and UI can show exactly which data was used (no more silent swaps).
+    """
+    import sys
+
+    key = (symbol.upper(), timeframe.upper(), int(n_bars))
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    df: Optional[pd.DataFrame] = None
+
+    if sys.platform == "win32":
+        try:
+            df = _load_mt5_terminal(symbol, timeframe, n_bars)
+        except ImportError:
+            df = None   # MT5 package missing even on Windows — fall through
+
+    if df is None:
+        # VPS path (or terminal unavailable): prefer the bridge, then yfinance.
+        try:
+            df = load_bridge(symbol, timeframe, n_bars)
+        except Exception:
+            df = _load_yfinance(symbol, timeframe, n_bars)
+
+    _cache_put(key, df)
+    return df
 
 
 # ─── Symbol mapping: Edgekit → Yahoo Finance ticker ─────────────────────────
@@ -253,7 +353,7 @@ def _load_yfinance(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFr
     if len(df) > n_bars:
         df = df.iloc[-n_bars:].reset_index(drop=True)
 
-    return df
+    return _set_source(df, "yahoo", "fallback", symbol, f"Yahoo (fallback) · {ticker}")
 
 
 def pip_size(symbol: str | None = None, price_sample: float | None = None) -> float:

@@ -10,7 +10,7 @@ frontend is migrated).
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional, Tuple
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from backend.engine.builder_v2 import (
 )
 from backend.engine.core import (
     load_mt5, simulate, compute_metrics, infer_pip_from_df, validate_ohlcv,
+    data_source_of,
 )
 from backend.api import store
 from backend.api.schemas import BacktestResponse, BacktestMetrics
@@ -383,6 +384,7 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
             "trades":    trades,
             "n_setups":  len(setups),
             "indicators": indicators,
+            "data_source": data_source_of(df),
         }
     except Exception as e:
         traceback.print_exc()
@@ -429,6 +431,7 @@ Return ONLY a JSON object matching the V2Graph schema. No prose, no markdown fen
 @router.post("/from-text")
 def from_text(
     req: FromTextRequest,
+    request:       Request,
     x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),   # legacy
     x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
     x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
@@ -439,6 +442,10 @@ def from_text(
 
     Key priority: X-AI-Key header → legacy X-Gemini-Key → server env var.
     """
+    # Cap server-paid usage (no user key) per identity/day.
+    if not ((x_ai_key or "").strip() or (x_gemini_key or "").strip()):
+        from backend.api.limits import enforce_ai_quota
+        enforce_ai_quota(request.client.host if request.client else "anon")
     try:
         return _from_text_impl(req, x_gemini_key, x_ai_key, x_ai_provider)
     except HTTPException:
@@ -457,6 +464,10 @@ _PROVIDER_ENV: Dict[str, str] = {
     "groq":      "GROQ_API_KEY",
     "mistral":   "MISTRAL_API_KEY",
 }
+
+# When a user hasn't supplied their own key, Edgekit uses Claude on the server's
+# dime (server-paid). The ANTHROPIC_API_KEY env var must be set on the VPS.
+_DEFAULT_PROVIDER = "anthropic"
 
 # Default model per provider
 _PROVIDER_MODEL: Dict[str, str] = {
@@ -604,8 +615,10 @@ def _from_text_impl(
 ) -> Dict[str, Any]:
     import os, json as _json
 
-    # Resolve provider + key
-    provider = (x_ai_provider or "gemini").strip().lower()
+    # Resolve provider + key. User-supplied key wins (they pay); otherwise fall
+    # back to the server's Claude key (server-paid default).
+    user_supplied = bool((x_ai_key or "").strip() or (x_gemini_key or "").strip())
+    provider = (x_ai_provider or _DEFAULT_PROVIDER).strip().lower()
     api_key  = (x_ai_key or "").strip()
 
     # Backward compat: X-Gemini-Key header
@@ -613,8 +626,9 @@ def _from_text_impl(
         api_key  = x_gemini_key.strip()
         provider = "gemini"
 
-    # Env var fallback
+    # Env var fallback (server key)
     if not api_key:
+        provider = _DEFAULT_PROVIDER if not x_ai_provider else provider
         api_key = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
 
     if not api_key:
@@ -733,6 +747,7 @@ CRITICAL: Output ONLY valid JSON matching one of the two formats above. No markd
 @router.post("/chat")
 def graph_chat(
     req: ChatRequest,
+    request:       Request,
     x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),
     x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
     x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
@@ -745,15 +760,25 @@ def graph_chat(
     """
     import os, json as _json
 
-    provider = (x_ai_provider or "gemini").strip().lower()
+    # User-supplied key wins (they pay). Otherwise default to the server's Claude.
+    user_supplied = bool((x_ai_key or "").strip() or (x_gemini_key or "").strip())
+    provider = (x_ai_provider or _DEFAULT_PROVIDER).strip().lower()
     api_key  = (x_ai_key or "").strip()
     if not api_key and x_gemini_key:
         api_key  = x_gemini_key.strip()
         provider = "gemini"
     if not api_key:
+        if not x_ai_provider:
+            provider = _DEFAULT_PROVIDER
         api_key = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
     if not api_key:
         raise HTTPException(503, "AI key required. Add yours under Resources → AI Model.")
+
+    # Server-paid usage (no user key) is capped per identity/day to bound spend.
+    if not user_supplied:
+        from backend.api.limits import enforce_ai_quota
+        ident = request.client.host if request.client else "anon"
+        enforce_ai_quota(ident)
 
     import json as _json
     catalog = []
@@ -1207,4 +1232,5 @@ def run_v2_backtest(
         equity_curve = m["curve"].tolist(),
         pnl_series   = m["pnl"].tolist(),
         issues       = validate_ohlcv(df),
+        data_source  = data_source_of(df),
     )

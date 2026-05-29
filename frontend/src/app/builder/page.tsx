@@ -117,6 +117,10 @@ function rfToGraph(nodes: Node[], edges: Edge[], name: string): V2Graph {
 }
 
 
+// Local autosave of the work-in-progress canvas, so a refresh doesn't lose it.
+// This is separate from "💾 Save", which stores to the account library.
+const DRAFT_KEY = "edgekit.builderDraft.v1";
+
 function BuilderInner() {
   const searchParams  = useSearchParams();
   const templateParam = searchParams.get("template");
@@ -149,6 +153,7 @@ function BuilderInner() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const bootstrappedRef = useRef(false);   // gates autosave until initial load/restore done
 
   const [tf,     setTf]     = useState("M15");
   const [symbol, setSymbol] = useState("XAUUSD");
@@ -180,9 +185,10 @@ function BuilderInner() {
     }).catch(() => {});
   }, []);
 
-  // ── URL-driven template auto-load ──────────────────────────────────────
+  // ── URL-driven template auto-load + autosaved-draft restore ────────────
   useEffect(() => {
     if (autoLoaded || library.length === 0) return;
+    bootstrappedRef.current = true;   // safe to start autosaving after this pass
 
     if (savedParam) {
       // Load a user-saved strategy from Supabase
@@ -205,8 +211,39 @@ function BuilderInner() {
     if (templateParam) {
       setAutoLoaded(true);
       void loadTemplate(templateParam);
+      return;
     }
+
+    // No URL params — restore the autosaved draft from the last session, if any.
+    try {
+      const raw = window.localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d?.graph?.nodes?.length) {
+          setAutoLoaded(true);
+          const rf = graphToRF(d.graph as V2Graph, library);
+          setName(d.name || d.graph.name || "Untitled strategy");
+          setNodes(rf.nodes); setEdges(rf.edges); setSelectedId(null);
+          setShowPicker(false);
+          if (d.symbol) setSymbol(d.symbol);
+          if (d.tf)     setTf(d.tf);
+        }
+      }
+    } catch { /* ignore corrupt draft */ }
   }, [savedParam, templateParam, library, autoLoaded]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Autosave the canvas to localStorage (debounced) ────────────────────
+  useEffect(() => {
+    if (!bootstrappedRef.current) return;   // don't autosave before initial load/restore
+    const t = setTimeout(() => {
+      try {
+        if (nodes.length === 0) { window.localStorage.removeItem(DRAFT_KEY); return; }
+        const draft = { name, symbol, tf, graph: rfToGraph(nodes, edges, name) };
+        window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      } catch { /* quota or serialization issue — ignore */ }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [nodes, edges, name, symbol, tf]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Recompute complexity whenever the graph changes ────────────────────
   useEffect(() => {
@@ -901,6 +938,17 @@ function BuilderInner() {
               <span className="font-mono text-muted">
                 DD {result.metrics.max_dd.toFixed(1)}R
               </span>
+              {result.data_source?.label && (
+                <span
+                  title="Data source used for this backtest"
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${
+                    result.data_source.provider === "mt5"
+                      ? "bg-sage/15 border-sage/40 text-sage"
+                      : "bg-amber/25 border-amber/50 text-amber-900"
+                  }`}>
+                  {result.data_source.provider === "mt5" ? "● " : "⚠ "}{result.data_source.label}
+                </span>
+              )}
             </div>
           ) : (
             <span className="text-xs italic text-muted">No results yet — click Run backtest</span>
