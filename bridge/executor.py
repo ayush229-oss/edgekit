@@ -87,14 +87,21 @@ def _evaluate(test: Dict[str, Any]) -> None:
     last_bar = str(df["time"].iloc[-1])
     tag = f"ek:{ft_id}"
 
-    # 1) Reconcile: did our open position get closed by SL/TP since last check?
-    if st["ticket"] is not None:
-        ours = [p for p in _bridge_positions() if p.get("comment", "").startswith(tag) or p.get("ticket") == st["ticket"]]
-        if not any(p.get("ticket") == st["ticket"] for p in ours):
-            profit = _realized_profit(st["ticket"])
-            _vps_event(ft_id, {"action": "close", "symbol": test["symbol"],
-                               "ticket": st["ticket"], "profit": profit, "comment": tag})
-            st["ticket"] = None
+    # 1) Reconcile against the BROKER (source of truth), so an executor restart
+    #    re-adopts an existing position instead of opening a duplicate.
+    ours = [p for p in _bridge_positions()
+            if p.get("comment", "") == tag or p.get("ticket") == st["ticket"]]
+    broker_ticket = ours[0]["ticket"] if ours else None
+
+    if st["ticket"] is not None and broker_ticket is None:
+        # We had a position; it's gone → broker closed it (SL/TP). Log realized PnL.
+        profit = _realized_profit(st["ticket"])
+        _vps_event(ft_id, {"action": "close", "symbol": test["symbol"],
+                           "ticket": st["ticket"], "profit": profit, "comment": tag})
+        st["ticket"] = None
+    elif broker_ticket is not None:
+        # Adopt whatever the broker says is open for this test.
+        st["ticket"] = broker_ticket
 
     # 2) Only act once per newly-closed bar.
     if st["last_bar"] == last_bar:
