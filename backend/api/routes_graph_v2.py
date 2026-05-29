@@ -782,45 +782,96 @@ def graph_chat(
         }
 
     model = (x_ai_model or "").strip() or None
-    try:
-        raw = _call_chat(provider, api_key, system_prompt, history, model=model)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise _normalize_api_error(provider, str(e))
 
-    # Parse response
-    try:
-        result = _json.loads(raw.strip())
+    def _build_from_raw(raw_text: str):
+        """Classify a model reply.
+
+        Returns one of:
+          ("graph",   graph_dict)  — valid, laid-out graph ready to load
+          ("message", text)        — a clarifying question / plain reply
+          ("invalid", error_str)   — claimed a graph but it failed validation
+        """
+        try:
+            result = _json.loads(raw_text.strip())
+        except Exception:
+            txt = raw_text.strip()
+            return ("message", txt or "Tell me more about your strategy idea.")
         if result.get("type") == "graph":
             graph = result.get("graph")
             if not isinstance(graph, dict):
-                raise ValueError("graph field missing")
+                return ("invalid", "graph field missing")
             try:
                 validate_graph(graph)
-                # Auto-layout
-                lane_order = ["universe","indicator","alpha","filter","sizing","risk","exit","execution"]
-                lane_of = {spec.type: spec.lane for spec in NODE_LIBRARY.values()}
-                lane_buckets: Dict[str, List[str]] = {l: [] for l in lane_order}
-                for n in graph.get("nodes", []):
-                    ln = lane_of.get(n.get("type", ""), "alpha")
-                    lane_buckets.setdefault(ln, []).append(n["id"])
-                pos: Dict[str, Dict[str, int]] = {}
-                for col, lane in enumerate(lane_order):
-                    for row, nid in enumerate(lane_buckets.get(lane, [])):
-                        pos[nid] = {"x": 80 + col * 240, "y": 80 + row * 180}
-                for n in graph.get("nodes", []):
-                    if n["id"] in pos:
-                        n["position"] = pos[n["id"]]
             except Exception as e:
-                return {"type": "message", "content": f"I tried to build your strategy but hit a validation issue ({e}). Could you give me a bit more detail about the entry condition?"}
-            return {"type": "graph", "graph": graph}
-        elif result.get("type") == "message":
-            return {"type": "message", "content": result.get("content", "")}
-        else:
-            return {"type": "message", "content": "Tell me more about your strategy idea — what market condition should trigger a trade?"}
-    except Exception:
-        return {"type": "message", "content": raw.strip() if raw.strip() else "Tell me more about your strategy idea."}
+                return ("invalid", str(e))
+            _layout_graph(graph)
+            return ("graph", graph)
+        if result.get("type") == "message":
+            return ("message", result.get("content", ""))
+        return ("message", "Tell me more about your strategy idea — what market condition should trigger a trade?")
+
+    def _ask(hist):
+        try:
+            return _call_chat(provider, api_key, system_prompt, hist, model=model)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _normalize_api_error(provider, str(e))
+
+    raw = _ask(history)
+    kind, payload = _build_from_raw(raw)
+
+    # Self-repair: a type mismatch / unwired port is a structural error the user
+    # can't fix. Hand the model its own broken JSON plus the exact validation
+    # error and let it correct the graph. Up to 2 automatic attempts.
+    repair_history = list(history)
+    attempts = 0
+    while kind == "invalid" and attempts < 2:
+        attempts += 1
+        repair_history = repair_history + [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": (
+                f"That graph failed validation:\n{payload}\n\n"
+                "Fix it. Hard rules: (1) every edge must connect two ports of the "
+                "SAME type — check each port's type in the catalog; (2) every node "
+                "input port must be wired; (3) include at least one execution node. "
+                "If two ports have incompatible types, insert the correct "
+                "intermediate node to bridge them rather than wiring them directly. "
+                "Output ONLY the corrected JSON in the same "
+                '{"type":"graph","graph":{...}} format — no prose.'
+            )},
+        ]
+        raw = _ask(repair_history)
+        kind, payload = _build_from_raw(raw)
+
+    if kind == "graph":
+        return {"type": "graph", "graph": payload}
+    if kind == "message":
+        return {"type": "message", "content": payload}
+    # Still invalid after repair attempts — be honest instead of looping.
+    return {"type": "message", "content": (
+        "I'm having trouble wiring this into a valid strategy graph. Try describing "
+        "it a little more simply — the exact entry trigger, the exit, and how much "
+        "to risk per trade — or pick a stronger model from the Model menu, and I'll "
+        "try again."
+    )}
+
+
+def _layout_graph(graph: Dict[str, Any]) -> None:
+    """Assign each node an (x, y) position by lane, in place."""
+    lane_order = ["universe","indicator","alpha","filter","sizing","risk","exit","execution"]
+    lane_of = {spec.type: spec.lane for spec in NODE_LIBRARY.values()}
+    lane_buckets: Dict[str, List[str]] = {l: [] for l in lane_order}
+    for n in graph.get("nodes", []):
+        ln = lane_of.get(n.get("type", ""), "alpha")
+        lane_buckets.setdefault(ln, []).append(n["id"])
+    pos: Dict[str, Dict[str, int]] = {}
+    for col, lane in enumerate(lane_order):
+        for row, nid in enumerate(lane_buckets.get(lane, [])):
+            pos[nid] = {"x": 80 + col * 240, "y": 80 + row * 180}
+    for n in graph.get("nodes", []):
+        if n["id"] in pos:
+            n["position"] = pos[n["id"]]
 
 
 def _call_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict],
