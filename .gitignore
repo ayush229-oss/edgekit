@@ -29,3 +29,8 @@ build/
 node_modules/
 .next/
 out/
+
+# Secrets — never commit (bridge token, key temp files)
+bridge/start_edgekit_bridge.ps1
+*anthropic_key*
+*_token*.txt

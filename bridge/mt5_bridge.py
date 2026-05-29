@@ -37,12 +37,18 @@ from __future__ import annotations
 import os
 import time
 
+from typing import Optional
+
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from backend.engine.core.data_loader import load_mt5, infer_pip_from_df
 
-app = FastAPI(title="Edgekit MT5 Bridge", version="1.0.0")
+app = FastAPI(title="Edgekit MT5 Bridge", version="1.1.0")
+
+# Orders are tagged with this magic so we only ever touch our own positions.
+EDGEKIT_MAGIC = 770011
 
 # Shared secret — the VPS must send the same value in X-Bridge-Token.
 _TOKEN = os.environ.get("BRIDGE_TOKEN", "").strip()
@@ -126,3 +132,165 @@ def bars(
         "elapsed_ms": int((time.time() - t0) * 1000),
         "bars":      records,
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DEMO-ONLY EXECUTION LAYER
+# Forward testing places real orders on a DEMO account to measure true spread,
+# slippage and commission. A hard guard refuses to ever trade a REAL account.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _mt5():
+    import MetaTrader5 as mt5
+    if not mt5.initialize():
+        raise HTTPException(502, f"MT5 not reachable: {mt5.last_error()}")
+    return mt5
+
+
+def _assert_demo(mt5) -> dict:
+    """Refuse to operate on anything that isn't a demo/contest account.
+    ACCOUNT_TRADE_MODE: 0 = DEMO, 1 = CONTEST, 2 = REAL."""
+    ai = mt5.account_info()
+    if ai is None:
+        raise HTTPException(502, "No MT5 account info available.")
+    if int(ai.trade_mode) == 2:   # REAL
+        raise HTTPException(
+            403,
+            "Refusing to trade: this MT5 terminal is logged into a REAL (live-money) "
+            "account. Forward testing only runs on a DEMO account.",
+        )
+    return {"login": ai.login, "server": ai.server, "trade_mode": int(ai.trade_mode),
+            "currency": ai.currency, "balance": float(ai.balance), "equity": float(ai.equity)}
+
+
+class MarketOrder(BaseModel):
+    symbol:  str
+    side:    str            # "buy" | "sell"
+    volume:  float = 0.01
+    sl:      Optional[float] = None
+    tp:      Optional[float] = None
+    comment: str = "edgekit-fwd"
+
+
+@app.get("/account")
+def account(x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token")):
+    _check_token(x_bridge_token)
+    mt5 = _mt5()
+    info = _assert_demo(mt5)   # also blocks reading a real account by mistake
+    return info
+
+
+@app.get("/positions")
+def positions(x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token")):
+    """Only our own forward-test positions (filtered by magic)."""
+    _check_token(x_bridge_token)
+    mt5 = _mt5()
+    _assert_demo(mt5)
+    pos = mt5.positions_get() or []
+    out = []
+    for p in pos:
+        if getattr(p, "magic", 0) != EDGEKIT_MAGIC:
+            continue
+        out.append({
+            "ticket": p.ticket, "symbol": p.symbol,
+            "side": "buy" if p.type == 0 else "sell",
+            "volume": float(p.volume), "price_open": float(p.price_open),
+            "sl": float(p.sl), "tp": float(p.tp),
+            "profit": float(p.profit), "comment": p.comment,
+        })
+    return {"positions": out}
+
+
+@app.post("/order/market")
+def order_market(req: MarketOrder,
+                 x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token")):
+    """Place a market order on the DEMO account; return the ACTUAL fill so the
+    caller can record real spread/slippage/commission."""
+    _check_token(x_bridge_token)
+    mt5 = _mt5()
+    _assert_demo(mt5)
+
+    side = req.side.lower().strip()
+    if side not in ("buy", "sell"):
+        raise HTTPException(400, "side must be 'buy' or 'sell'.")
+    if not mt5.symbol_select(req.symbol, True):
+        raise HTTPException(400, f"Symbol {req.symbol} not available on this terminal.")
+
+    tick = mt5.symbol_info_tick(req.symbol)
+    if tick is None:
+        raise HTTPException(502, f"No tick for {req.symbol}.")
+    spread = float(tick.ask - tick.bid)
+    price  = float(tick.ask if side == "buy" else tick.bid)
+    otype  = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+
+    base = {
+        "action":    mt5.TRADE_ACTION_DEAL,
+        "symbol":    req.symbol,
+        "volume":    float(req.volume),
+        "type":      otype,
+        "price":     price,
+        "deviation": 20,
+        "magic":     EDGEKIT_MAGIC,
+        "comment":   req.comment[:31],
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+    if req.sl: base["sl"] = float(req.sl)
+    if req.tp: base["tp"] = float(req.tp)
+
+    # Broker filling mode varies — try the common ones.
+    last = None
+    for fmode in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+        res = mt5.order_send({**base, "type_filling": fmode})
+        last = res
+        if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
+            return {
+                "ok": True, "ticket": res.order, "deal": res.deal,
+                "requested_price": price, "fill_price": float(res.price),
+                "slippage": float(res.price - price),
+                "spread": spread, "volume": float(res.volume),
+                "side": side, "symbol": req.symbol,
+                "comment": res.comment,
+            }
+    rc = getattr(last, "retcode", None)
+    raise HTTPException(502, f"Order rejected (retcode={rc}): {getattr(last, 'comment', '')}")
+
+
+@app.post("/order/close")
+def order_close(ticket: int = Query(...),
+                x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token")):
+    """Close one of our positions by ticket; return realized PnL + fill."""
+    _check_token(x_bridge_token)
+    mt5 = _mt5()
+    _assert_demo(mt5)
+
+    pos = mt5.positions_get(ticket=ticket)
+    if not pos:
+        raise HTTPException(404, f"Position {ticket} not found.")
+    p = pos[0]
+    if getattr(p, "magic", 0) != EDGEKIT_MAGIC:
+        raise HTTPException(403, "Refusing to close a position Edgekit didn't open.")
+
+    close_side = mt5.ORDER_TYPE_SELL if p.type == 0 else mt5.ORDER_TYPE_BUY
+    tick = mt5.symbol_info_tick(p.symbol)
+    price = float(tick.bid if p.type == 0 else tick.ask)
+    base = {
+        "action":   mt5.TRADE_ACTION_DEAL,
+        "symbol":   p.symbol,
+        "volume":   float(p.volume),
+        "type":     close_side,
+        "position": p.ticket,
+        "price":    price,
+        "deviation": 20,
+        "magic":    EDGEKIT_MAGIC,
+        "comment":  "edgekit-close",
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+    last = None
+    for fmode in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+        res = mt5.order_send({**base, "type_filling": fmode})
+        last = res
+        if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
+            return {"ok": True, "ticket": p.ticket, "fill_price": float(res.price),
+                    "profit": float(p.profit)}
+    rc = getattr(last, "retcode", None)
+    raise HTTPException(502, f"Close rejected (retcode={rc}): {getattr(last, 'comment', '')}")
