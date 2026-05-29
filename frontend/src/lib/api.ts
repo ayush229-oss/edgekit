@@ -307,9 +307,14 @@ export const AI_MODEL_OPTIONS: Record<string, { value: string; label: string }[]
     { value: "gemini-1.5-pro",    label: "Gemini 1.5 Pro" },
   ],
   anthropic: [
-    { value: "",                       label: "Auto (recommended)" },
-    { value: "claude-sonnet-4-5",      label: "Claude Sonnet 4.5" },
-    { value: "claude-3-5-haiku-latest",label: "Claude 3.5 Haiku" },
+    { value: "",                        label: "Auto (recommended)" },
+    { value: "claude-opus-4-1",         label: "Claude Opus 4.1 (most capable)" },
+    { value: "claude-opus-4-20250514",  label: "Claude Opus 4" },
+    { value: "claude-sonnet-4-5",       label: "Claude Sonnet 4.5" },
+    { value: "claude-sonnet-4-20250514",label: "Claude Sonnet 4" },
+    { value: "claude-3-7-sonnet-latest",label: "Claude 3.7 Sonnet" },
+    { value: "claude-3-5-sonnet-latest",label: "Claude 3.5 Sonnet" },
+    { value: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku (cheapest)" },
   ],
   openai: [
     { value: "",         label: "Auto (recommended)" },
