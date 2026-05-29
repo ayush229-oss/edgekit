@@ -731,6 +731,7 @@ def graph_chat(
     x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),
     x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
     x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
+    x_ai_model:    Optional[str] = Header(None, alias="X-AI-Model"),
 ) -> Dict[str, Any]:
     """
     Multi-turn strategy design assistant for non-technical users.
@@ -780,8 +781,9 @@ def graph_chat(
             "content": f"[Symbol: {req.symbol}, Timeframe: {req.timeframe}]\n\n{history[0]['content']}",
         }
 
+    model = (x_ai_model or "").strip() or None
     try:
-        raw = _call_chat(provider, api_key, system_prompt, history)
+        raw = _call_chat(provider, api_key, system_prompt, history, model=model)
     except HTTPException:
         raise
     except Exception as e:
@@ -821,19 +823,25 @@ def graph_chat(
         return {"type": "message", "content": raw.strip() if raw.strip() else "Tell me more about your strategy idea."}
 
 
-def _call_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict]) -> str:
-    """Call AI provider with a full conversation history."""
+def _call_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict],
+               model: Optional[str] = None) -> str:
+    """Call AI provider with a full conversation history.
+
+    `model` is an optional user-selected override. When None, each provider
+    uses its built-in default.
+    """
     if provider == "gemini":
-        return _call_gemini_chat(api_key, system_prompt, history)
+        return _call_gemini_chat(api_key, system_prompt, history, model=model)
     elif provider == "anthropic":
-        return _call_anthropic_chat(api_key, system_prompt, history)
+        return _call_anthropic_chat(api_key, system_prompt, history, model=model)
     elif provider in ("openai", "groq", "mistral"):
-        return _call_openai_compat_chat(provider, api_key, system_prompt, history)
+        return _call_openai_compat_chat(provider, api_key, system_prompt, history, model=model)
     else:
         raise HTTPException(400, f"Unknown provider '{provider}'.")
 
 
-def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict]) -> str:
+def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict],
+                      model: Optional[str] = None) -> str:
     import time
     try:
         from google import genai
@@ -847,8 +855,12 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict]) -> 
         role = "model" if m["role"] == "assistant" else "user"
         contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
 
-    # Try gemini-2.5-flash first, fall back to gemini-2.0-flash on overload
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    # User-selected model is tried first; gemini-2.0-flash stays as a safety
+    # fallback on overload. When no model is chosen, use the default pair.
+    if model:
+        models_to_try = [model] + (["gemini-2.0-flash"] if model != "gemini-2.0-flash" else [])
+    else:
+        models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     last_err = None
     for model in models_to_try:
         for attempt in range(3):
@@ -875,14 +887,15 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict]) -> 
     raise HTTPException(503, f"Gemini is currently overloaded. Please try again in a moment. ({last_err})")
 
 
-def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict]) -> str:
+def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict],
+                         model: Optional[str] = None) -> str:
     try:
         import anthropic
     except ImportError:
         raise HTTPException(503, "anthropic SDK not installed.")
     client = anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
-        model="claude-sonnet-4-5",
+        model=model or "claude-sonnet-4-5",
         max_tokens=4096,
         temperature=0.4,
         system=system_prompt,
@@ -891,7 +904,8 @@ def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict]) 
     return msg.content[0].text if msg.content else ""
 
 
-def _call_openai_compat_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict]) -> str:
+def _call_openai_compat_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict],
+                             model: Optional[str] = None) -> str:
     try:
         from openai import OpenAI
     except ImportError:
@@ -902,7 +916,7 @@ def _call_openai_compat_chat(provider: str, api_key: str, system_prompt: str, hi
     client = OpenAI(**kwargs)
     messages = [{"role": "system", "content": system_prompt}] + history
     resp = client.chat.completions.create(
-        model=_PROVIDER_MODEL[provider],
+        model=model or _PROVIDER_MODEL[provider],
         temperature=0.4,
         response_format={"type": "json_object"},
         messages=messages,

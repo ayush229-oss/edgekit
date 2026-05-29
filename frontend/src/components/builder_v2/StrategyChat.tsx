@@ -8,7 +8,10 @@
  * then builds the graph and lets the user load it onto the canvas.
  */
 import { useEffect, useRef, useState } from "react";
-import { v2Chat, hasUserAIKey, type ChatMessage, type V2Graph } from "@/lib/api";
+import {
+  v2Chat, hasUserAIKey, getAIProvider, getAIModel, setAIModel, AI_MODEL_OPTIONS,
+  type ChatMessage, type V2Graph,
+} from "@/lib/api";
 import Link from "next/link";
 
 
@@ -31,12 +34,16 @@ export function StrategyChat({
   const [graph,     setGraph]     = useState<V2Graph | null>(null);
   const [err,       setErr]       = useState<string | null>(null);
   const [hasKey,    setHasKey]    = useState(false);
+  const [provider,  setProvider]  = useState("gemini");
+  const [model,     setModel]     = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (open) {
       setHasKey(hasUserAIKey());
+      setProvider(getAIProvider());
+      setModel(getAIModel());
       // Start the conversation with a greeting from the AI if empty
       if (messages.length === 0) {
         setMessages([{
@@ -123,7 +130,22 @@ export function StrategyChat({
             </div>
             <h2 className="text-[17px] font-semibold text-ink">Describe your strategy</h2>
           </div>
-          <button onClick={close} className="text-muted hover:text-ink text-2xl leading-none px-2 shrink-0">×</button>
+          <div className="flex items-center gap-2 shrink-0">
+            <label className="flex items-center gap-1.5" title="Choose which AI model answers">
+              <span className="text-[10px] uppercase tracking-wide text-muted">Model</span>
+              <select
+                value={model}
+                onChange={(e) => { setModel(e.target.value); setAIModel(e.target.value); }}
+                className="rounded-lg bg-paper border border-border px-2 py-1 text-[12px] text-ink
+                           focus:outline-none focus:ring-1 focus:ring-money max-w-[150px]"
+              >
+                {(AI_MODEL_OPTIONS[provider] ?? AI_MODEL_OPTIONS.gemini).map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <button onClick={close} className="text-muted hover:text-ink text-2xl leading-none px-2">×</button>
+          </div>
         </div>
 
         {/* No AI key warning */}

@@ -273,6 +273,59 @@ export function hasUserAIKey(): boolean {
   return !!getUserAIKey();
 }
 
+// The provider the user configured on /resources (gemini, anthropic, ...).
+export function getAIProvider(): string {
+  return getUserAIKey()?.provider ?? "gemini";
+}
+
+// Optional model override, chosen in the AI Strategy Builder. Empty = "Auto"
+// (backend picks its default). Stored per-browser in localStorage.
+const AI_MODEL_KEY = "edgekit.aiModel.v1";
+
+export function getAIModel(): string {
+  if (typeof window === "undefined") return "";
+  try { return window.localStorage.getItem(AI_MODEL_KEY) ?? ""; }
+  catch { return ""; }
+}
+
+export function setAIModel(model: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (model) window.localStorage.setItem(AI_MODEL_KEY, model);
+    else        window.localStorage.removeItem(AI_MODEL_KEY);
+  } catch { /* ignore */ }
+}
+
+// Model menu shown in the chat, keyed by provider.
+export const AI_MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  gemini: [
+    { value: "",                  label: "Auto (recommended)" },
+    { value: "gemini-2.5-flash",  label: "Gemini 2.5 Flash" },
+    { value: "gemini-2.5-pro",    label: "Gemini 2.5 Pro" },
+    { value: "gemini-2.0-flash",  label: "Gemini 2.0 Flash" },
+    { value: "gemini-1.5-flash",  label: "Gemini 1.5 Flash" },
+    { value: "gemini-1.5-pro",    label: "Gemini 1.5 Pro" },
+  ],
+  anthropic: [
+    { value: "",                       label: "Auto (recommended)" },
+    { value: "claude-sonnet-4-5",      label: "Claude Sonnet 4.5" },
+    { value: "claude-3-5-haiku-latest",label: "Claude 3.5 Haiku" },
+  ],
+  openai: [
+    { value: "",         label: "Auto (recommended)" },
+    { value: "gpt-4o",   label: "GPT-4o" },
+    { value: "gpt-4o-mini", label: "GPT-4o mini" },
+  ],
+  groq: [
+    { value: "", label: "Auto (recommended)" },
+    { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
+  ],
+  mistral: [
+    { value: "", label: "Auto (recommended)" },
+    { value: "mistral-large-latest", label: "Mistral Large" },
+  ],
+};
+
 /** @deprecated use hasUserAIKey */
 export function hasUserGeminiKey(): boolean {
   return hasUserAIKey();
@@ -327,6 +380,8 @@ export async function v2Chat(body: {
     headers["X-AI-Key"]      = ai.key;
     headers["X-AI-Provider"] = ai.provider;
   }
+  const model = getAIModel();
+  if (model) headers["X-AI-Model"] = model;
   const r = await fetch(`${API_URL}/graph/v2/chat`, {
     method:  "POST",
     headers,
