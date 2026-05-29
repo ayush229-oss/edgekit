@@ -962,13 +962,27 @@ def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict],
     except ImportError:
         raise HTTPException(503, "anthropic SDK not installed.")
     client = anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
+    # Prompt caching: the system prompt embeds the full (static) node catalog,
+    # which is identical on every turn and across users. Marking it cacheable
+    # lets Anthropic reuse it — cache reads are ~90% cheaper and faster (5-min
+    # TTL, refreshed on each hit). Sent as a content block so cache_control can
+    # attach. Falls back gracefully if the SDK is too old to support it.
+    system_blocks = [{
+        "type": "text",
+        "text": system_prompt,
+        "cache_control": {"type": "ephemeral"},
+    }]
+    create_kwargs = dict(
         model=model or "claude-sonnet-4-5",
         max_tokens=4096,
         temperature=0.4,
-        system=system_prompt,
         messages=history,
     )
+    try:
+        msg = client.messages.create(system=system_blocks, **create_kwargs)
+    except TypeError:
+        # Older SDK that doesn't accept structured system blocks.
+        msg = client.messages.create(system=system_prompt, **create_kwargs)
     return msg.content[0].text if msg.content else ""
 
 
