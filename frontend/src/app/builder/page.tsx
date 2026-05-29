@@ -22,6 +22,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import ReactFlow, {
   Background, Controls, MiniMap,
@@ -136,6 +137,9 @@ function BuilderInner() {
   const [chartOpen,  setChartOpen]  = useState(false);
   const [customNodeOpen, setCustomNodeOpen] = useState(false);
   const [paletteMin, setPaletteMin] = useState(false);
+  const [navOpen,    setNavOpen]    = useState(false);   // builder page-nav menu
+  const [varsOpen,   setVarsOpen]   = useState(false);   // variables (nodes) dropdown
+  const [stashedNodes, setStashedNodes] = useState<{ node: Node; edges: Edge[] }[]>([]);  // disabled variables
   const [logicHidden, setLogicHidden] = useState(true);
   const [resultsMin, setResultsMin] = useState(true);
 
@@ -404,6 +408,33 @@ function BuilderInner() {
     setNodes((ns) => ns.filter((n) => n.id !== selectedId));
     setEdges((es) => es.filter((e) => e.source !== selectedId && e.target !== selectedId));
     setSelectedId(null);
+  }
+
+  // ── Variables (nodes) enable/disable — toggle a variable off and on ──────
+  // Disabling stashes the node + its wires so the strategy can be put back
+  // exactly; the graph realigns (edges drop) and the backtest reflects it.
+  function disableVar(id: string) {
+    const node = nodes.find((n) => n.id === id);
+    if (!node) return;
+    const nodeEdges = edges.filter((e) => e.source === id || e.target === id);
+    setStashedNodes((prev) => [...prev, { node, edges: nodeEdges }]);
+    setNodes((ns) => ns.filter((n) => n.id !== id));
+    setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
+    if (selectedId === id) setSelectedId(null);
+  }
+
+  function enableVar(id: string) {
+    const stash = stashedNodes.find((d) => d.node.id === id);
+    if (!stash) return;
+    setStashedNodes((prev) => prev.filter((d) => d.node.id !== id));
+    setNodes((ns) => [...ns, stash.node]);
+    // Only restore wires whose other endpoint still exists on the canvas.
+    setEdges((es) => {
+      const present = new Set([...nodes.map((n) => n.id), id]);
+      const restore = stash.edges.filter((e) => present.has(e.source) && present.has(e.target));
+      const have = new Set(es.map((e) => e.id));
+      return [...es, ...restore.filter((e) => !have.has(e.id))];
+    });
   }
 
   function duplicateSelected() {
@@ -726,6 +757,35 @@ function BuilderInner() {
 
       {/* ── Top bar ────────────────────────────────────────────────── */}
       <div className="bg-cream2 border-b border-border px-4 py-2.5 flex items-center gap-3 shrink-0">
+        {/* Page navigation (builder is outside the (app) sidebar layout) */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setNavOpen((v) => !v)}
+            onBlur={() => setTimeout(() => setNavOpen(false), 150)}
+            title="Menu"
+            className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-lg hover:bg-cream transition-colors">
+            <span className="w-6 h-6 rounded-md bg-ink text-cream2 flex items-center justify-center font-bold text-[12px]">E</span>
+            <span className="text-muted text-xs">▾</span>
+          </button>
+          {navOpen && (
+            <div className="absolute left-0 top-full mt-1 z-50 w-44 bg-cream2 border border-border rounded-lg shadow-lg py-1">
+              {[
+                { href: "/home",       label: "🏠 Home" },
+                { href: "/strategies", label: "📊 Strategies" },
+                { href: "/builder",    label: "🧩 Builder" },
+                { href: "/resources",  label: "🔧 Resources" },
+                { href: "/analytics",  label: "📈 Analytics" },
+              ].map((it) => (
+                <Link key={it.href} href={it.href}
+                  className="block px-3 py-1.5 text-xs text-ink hover:bg-cream transition-colors">
+                  {it.label}
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="w-px h-5 bg-border shrink-0" />
+
         <input value={name} onChange={(e) => setName(e.target.value)}
           className="bg-transparent text-sm font-medium px-2 py-1 rounded hover:bg-cream focus:bg-cream focus:outline-none focus:ring-1 focus:ring-sage flex-1 max-w-sm" />
 
@@ -795,6 +855,50 @@ function BuilderInner() {
           className="text-xs px-3 py-1.5 rounded bg-sky-100 border border-sky-200 text-sky-900 hover:bg-sky-200 transition-colors font-medium disabled:opacity-50">
           📈 Preview chart
         </button>
+        {/* Variables dropdown — toggle any node on/off; graph realigns */}
+        <div className="relative shrink-0">
+          <button onClick={() => setVarsOpen((v) => !v)}
+            disabled={nodes.length === 0 && stashedNodes.length === 0}
+            title="Turn the strategy's variables on or off"
+            className="text-xs px-3 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40 flex items-center gap-1">
+            Variables{stashedNodes.length > 0 ? ` (${stashedNodes.length} off)` : ""} ▾
+          </button>
+          {varsOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setVarsOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 z-50 w-72 bg-cream2 border border-border rounded-lg shadow-lg py-1 max-h-96 overflow-y-auto">
+                <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted">Variables in this strategy</div>
+                {nodes.map((n) => {
+                  const spec = (n.data as any).spec as V2NodeSpec;
+                  return (
+                    <label key={n.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-cream cursor-pointer">
+                      <input type="checkbox" checked onChange={() => disableVar(n.id)} className="accent-sage" />
+                      <span className="flex-1 truncate">{spec?.label ?? n.id}</span>
+                      <span className="text-[10px] text-muted">{spec?.lane}</span>
+                    </label>
+                  );
+                })}
+                {stashedNodes.map((d) => {
+                  const spec = (d.node.data as any).spec as V2NodeSpec;
+                  return (
+                    <label key={d.node.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-cream cursor-pointer opacity-70">
+                      <input type="checkbox" checked={false} onChange={() => enableVar(d.node.id)} className="accent-sage" />
+                      <span className="flex-1 truncate line-through">{spec?.label ?? d.node.id}</span>
+                      <span className="text-[10px] text-muted">off</span>
+                    </label>
+                  );
+                })}
+                {nodes.length === 0 && stashedNodes.length === 0 && (
+                  <div className="px-3 py-2 text-[11px] text-muted italic">No variables yet.</div>
+                )}
+                <div className="px-3 py-1.5 mt-1 text-[10px] text-muted border-t border-border">
+                  Add new variables from the palette on the left.
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
         <button onClick={() => setShowPicker(true)}
           className="text-xs px-3 py-1.5 rounded border border-border hover:bg-cream transition-colors">
           Templates

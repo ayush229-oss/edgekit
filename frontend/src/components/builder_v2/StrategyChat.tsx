@@ -14,6 +14,26 @@ import {
 } from "@/lib/api";
 import Link from "next/link";
 
+// ── Conversation persistence (kept across close/reopen + refresh) ──────────
+const CHAT_KEY = "edgekit.chat.v1";
+type SavedChat = { messages: ChatMessage[]; graph: V2Graph | null; decisions: GraphDecision[] };
+
+function loadChat(): SavedChat | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CHAT_KEY);
+    return raw ? (JSON.parse(raw) as SavedChat) : null;
+  } catch { return null; }
+}
+function saveChat(c: SavedChat): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(CHAT_KEY, JSON.stringify(c)); } catch { /* ignore */ }
+}
+function clearChat(): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.removeItem(CHAT_KEY); } catch { /* ignore */ }
+}
+
 
 export function StrategyChat({
   open,
@@ -47,37 +67,64 @@ export function StrategyChat({
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
 
+  function greeting(): ChatMessage {
+    return {
+      role: "assistant",
+      content: editing
+        ? `I can see your current strategy${resultSummary ? ` (last backtest: ${resultSummary})` : ""}. Tell me what to change — e.g. "loosen it so it actually trades", "remove the AND condition", or "add a trend filter" — and I'll update it.`
+        : "Hey! Tell me about your trading idea in plain English — no jargon needed. For example: \"I want to buy gold when it breaks above a recent high and sell when it drops back below.\" What's your idea?",
+    };
+  }
+
   useEffect(() => {
-    if (open) {
-      setHasKey(hasUserAIKey());
-      setProvider(getAIProvider());
-      setModel(getAIModel());
-      // Start the conversation with a greeting from the AI if empty
-      if (messages.length === 0) {
-        setMessages([{
-          role:    "assistant",
-          content: editing
-            ? `I can see your current strategy${resultSummary ? ` (last backtest: ${resultSummary})` : ""}. Tell me what to change — e.g. "loosen it so it actually trades", "remove the AND condition", or "add a trend filter" — and I'll update it.`
-            : "Hey! Tell me about your trading idea in plain English — no jargon needed. For example: \"I want to buy gold when it breaks above a recent high and sell when it drops back below.\" What's your idea?",
-        }]);
+    if (!open) return;
+    setHasKey(hasUserAIKey());
+    setProvider(getAIProvider());
+    setModel(getAIModel());
+    // Restore the previous conversation (kept across close/reopen so the user
+    // can iterate mid-backtest without losing context). Falls back to a greeting.
+    if (messages.length === 0) {
+      const saved = loadChat();
+      if (saved && saved.messages?.length) {
+        setMessages(saved.messages);
+        if (saved.graph)     setGraph(saved.graph);
+        if (saved.decisions) setDecisions(saved.decisions);
+      } else {
+        setMessages([greeting()]);
       }
     }
+    // Focus the input on open.
+    setTimeout(() => inputRef.current?.focus(), 50);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  function reset() {
-    setMessages([]);
+  // Persist the conversation so it survives close/reopen + refresh.
+  useEffect(() => {
+    if (!open) return;
+    if (messages.length === 0) return;
+    saveChat({ messages, graph, decisions });
+  }, [messages, graph, decisions, open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-focus the textbox whenever the AI finishes responding.
+  useEffect(() => {
+    if (open && !busy) inputRef.current?.focus();
+  }, [busy, open]);
+
+  function newChat() {
+    setMessages([greeting()]);
     setInput("");
     setGraph(null);
     setDecisions([]);
     setErr(null);
+    clearChat();
+    setTimeout(() => inputRef.current?.focus(), 50);
   }
 
   function close() {
-    reset();
+    // Keep the conversation (persisted) — just close. Use "New chat" to clear.
     onClose();
   }
 
@@ -160,6 +207,11 @@ export function StrategyChat({
                 ))}
               </select>
             </label>
+            <button onClick={newChat}
+              title="Start a fresh conversation (clears saved context)"
+              className="text-[11px] px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-surface2 transition-colors">
+              New chat
+            </button>
             <button onClick={close} className="text-muted hover:text-ink text-2xl leading-none px-2">×</button>
           </div>
         </div>
