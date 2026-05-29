@@ -459,3 +459,52 @@ export async function v2RunBacktest(body: any): Promise<BacktestResponse> {
   if (!r.ok) throw new Error((await r.text()) || `v2 backtest: ${r.status}`);
   return r.json();
 }
+
+
+// ─── Forward (paper) testing ──────────────────────────────────────────────
+export type ForwardMetrics = {
+  trades: number; wr: number; ev: number; total_r: number;
+  profit_factor: number; max_dd: number; final_equity: number;
+};
+export type ForwardLatest = {
+  metrics?: ForwardMetrics;
+  trades?:  Array<{ direction: string; entry: number; sl: number; result: string; exit_type: string; pnl_r: number; time: string | null }>;
+  equity?:  number[];
+  bars_seen?: number;
+  data_source?: DataSource;
+  last_run?: string;
+  error?: string;
+};
+export type ForwardTest = {
+  id: number; name: string; symbol: string; timeframe: string; status: string;
+  started_at?: string; created_at?: string; updated_at?: string;
+  baseline?: Record<string, any>;
+  latest?: ForwardLatest;
+};
+
+export async function forwardStart(body: {
+  graph: V2Graph; name?: string; symbol?: string; timeframe?: string;
+  mgmt?: Record<string, any>; baseline?: Record<string, any>;
+}): Promise<ForwardTest> {
+  const r = await fetch(`${API_URL}/forward/start`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await readApiError(r)) || `forward start: ${r.status}`);
+  return r.json();
+}
+export async function forwardList(): Promise<ForwardTest[]> {
+  const r = await fetch(`${API_URL}/forward/list`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`forward list: ${r.status}`);
+  return r.json();
+}
+export async function forwardRefresh(id: number): Promise<ForwardTest> {
+  const r = await fetch(`${API_URL}/forward/${id}/refresh`, { method: "POST" });
+  if (!r.ok) throw new Error(`forward refresh: ${r.status}`);
+  return r.json();
+}
+export async function forwardStop(id: number): Promise<ForwardTest> {
+  const r = await fetch(`${API_URL}/forward/${id}/stop`, { method: "POST" });
+  if (!r.ok) throw new Error(`forward stop: ${r.status}`);
+  return r.json();
+}

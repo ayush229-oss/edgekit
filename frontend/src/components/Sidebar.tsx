@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import {
   Home, BarChart2, Layers, Wrench, TrendingUp, MessageSquare,
-  Lightbulb, Share2, FileText, ShieldCheck,
+  Lightbulb, Share2, FileText, ShieldCheck, FlaskConical,
   ChevronLeft, ChevronRight, ArrowLeft, ArrowRight,
 } from "lucide-react";
 
@@ -16,6 +16,7 @@ const MAIN_NAV: NavItem[] = [
   { href: "/home",          icon: Home,          label: "Home" },
   { href: "/strategies",    icon: BarChart2,     label: "Strategies" },
   { href: "/builder",       icon: Layers,        label: "Builder" },
+  { href: "/forward",       icon: FlaskConical,  label: "Forward Tests" },
   { href: "/resources",     icon: Wrench,        label: "Resources" },
   { href: "/analytics",     icon: TrendingUp,    label: "Analytics" },
   { href: "/testimonials",  icon: MessageSquare, label: "Testimonials" },

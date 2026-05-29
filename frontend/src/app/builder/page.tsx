@@ -34,7 +34,7 @@ import "reactflow/dist/style.css";
 
 import {
   v2ListNodes, v2ListTemplates, v2GetTemplate, v2RunBacktest, v2Complexity,
-  v2ListSymbols,
+  v2ListSymbols, forwardStart,
   type V2NodeSpec, type V2Graph, type V2Complexity as V2C,
   type TemplateSummary, type BacktestResponse, type SymbolInfo,
 } from "@/lib/api";
@@ -140,6 +140,7 @@ function BuilderInner() {
   const [navOpen,    setNavOpen]    = useState(false);   // builder page-nav menu
   const [varsOpen,   setVarsOpen]   = useState(false);   // variables (nodes) dropdown
   const [stashedNodes, setStashedNodes] = useState<{ node: Node; edges: Edge[] }[]>([]);  // disabled variables
+  const [fwdMsg,     setFwdMsg]     = useState<string | null>(null);   // forward-test feedback
   const [logicHidden, setLogicHidden] = useState(true);
   const [resultsMin, setResultsMin] = useState(true);
 
@@ -584,6 +585,31 @@ function BuilderInner() {
     }
   }
 
+  // ── Start a forward (paper) test from the current strategy ───────────────
+  async function startForwardTest() {
+    if (nodes.length === 0) return;
+    setFwdMsg("Starting…");
+    try {
+      await forwardStart({
+        graph: rfToGraph(nodes, edges, name),
+        name, symbol, timeframe: tf,
+        mgmt: {
+          target_r:         mgmt.target_r,
+          target_close_pct: mgmt.target_close_pct,
+          trail_mode:       mgmt.trail_mode,
+          trail_start:      mgmt.trail_start,
+          trail_params:     mgmt.trail_params,
+        },
+        baseline: result ? result.metrics : {},
+      });
+      setFwdMsg("Forward test started ✓ — track it on the Forward Tests page");
+      setTimeout(() => setFwdMsg(null), 5000);
+    } catch (e: any) {
+      setFwdMsg("Couldn't start: " + (e?.message ?? String(e)).slice(0, 80));
+      setTimeout(() => setFwdMsg(null), 6000);
+    }
+  }
+
   // ── Run backtest ───────────────────────────────────────────────────────
   async function run() {
     setBusy(true); setErr(null);
@@ -773,6 +799,7 @@ function BuilderInner() {
                 { href: "/home",       label: "🏠 Home" },
                 { href: "/strategies", label: "📊 Strategies" },
                 { href: "/builder",    label: "🧩 Builder" },
+                { href: "/forward",    label: "🧪 Forward Tests" },
                 { href: "/resources",  label: "🔧 Resources" },
                 { href: "/analytics",  label: "📈 Analytics" },
               ].map((it) => (
@@ -1057,10 +1084,19 @@ function BuilderInner() {
           ) : (
             <span className="text-xs italic text-muted">No results yet — click Run backtest</span>
           )}
+          {fwdMsg && <span className="text-[11px] text-sage ml-auto shrink-0">{fwdMsg}</span>}
+          {nodes.length > 0 && (
+            <button
+              onClick={startForwardTest}
+              title="Track this strategy live on fresh bars (paper trading)"
+              className={`${fwdMsg ? "" : "ml-auto"} text-xs px-2.5 py-0.5 rounded bg-sky-100 text-sky-900 hover:bg-sky-200 transition-colors font-medium shrink-0`}>
+              🧪 Forward test
+            </button>
+          )}
           {result && (
             <button
               onClick={() => { setSaveResultName(name); setSaveResultOpen(true); }}
-              className="ml-auto text-xs px-2.5 py-0.5 rounded bg-money/15 text-money hover:bg-money/25 transition-colors font-medium shrink-0">
+              className="text-xs px-2.5 py-0.5 rounded bg-money/15 text-money hover:bg-money/25 transition-colors font-medium shrink-0">
               Save result
             </button>
           )}

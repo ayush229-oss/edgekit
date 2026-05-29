@@ -40,6 +40,7 @@ from backend.api.routes_user import router as user_router
 from backend.api.preview import router as preview_router
 from backend.api.routes_graph    import router as graph_router
 from backend.api.routes_graph_v2 import router as graph_v2_router
+from backend.api.routes_forward  import router as forward_router, start_forward_scheduler
 from backend.db import get_db, init_db, BacktestRun, User
 
 app = FastAPI(
@@ -57,10 +58,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize DB tables on startup
+# Initialize DB tables + start the forward-test refresh loop on startup
 @app.on_event("startup")
 def _startup():
     init_db()
+    start_forward_scheduler()
 
 # Mount sub-routers
 app.include_router(billing_router)
@@ -68,6 +70,7 @@ app.include_router(user_router)
 app.include_router(preview_router)
 app.include_router(graph_router)
 app.include_router(graph_v2_router)
+app.include_router(forward_router)
 
 
 # ─── Global exception handler ────────────────────────────────────────────────
