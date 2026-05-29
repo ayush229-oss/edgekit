@@ -862,6 +862,7 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict],
     else:
         models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
     last_err = None
+    quota_hit = False
     for model in models_to_try:
         for attempt in range(3):
             try:
@@ -876,14 +877,30 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict],
                 return resp.text or ""
             except Exception as e:
                 last_err = e
-                err_str = str(e)
-                # Retry on 503/overload/resource exhausted
-                if any(x in err_str for x in ["503", "UNAVAILABLE", "overloaded", "resource_exhausted", "RESOURCE_EXHAUSTED"]):
+                err_low = str(e).lower()
+                # Quota/billing limit (429): retrying the same key won't help on a
+                # daily cap, and the fallback model shares the same quota. Surface
+                # a clear, actionable message instead of pretending it's overload.
+                if any(x in err_low for x in ["429", "resource_exhausted", "quota", "exceeded your current quota"]):
+                    quota_hit = True
+                    break  # quota is per-key — trying another model won't help
+                # Transient overload (503): back off and retry, then try next model.
+                if any(x in err_low for x in ["503", "unavailable", "overloaded"]):
                     if attempt < 2:
                         time.sleep(2 ** attempt)  # 1s, 2s
                         continue
                     break  # try next model
                 raise  # non-retriable error — re-raise immediately
+        if quota_hit:
+            break
+    if quota_hit:
+        raise HTTPException(
+            429,
+            "Your Gemini API key is out of quota (free-tier daily limit reached). "
+            "Pick a different model from the Model menu, switch provider on the "
+            "Resources page (Groq has a generous free tier), or enable billing on "
+            "your Google AI key. Quota resets daily.",
+        )
     raise HTTPException(503, f"Gemini is currently overloaded. Please try again in a moment. ({last_err})")
 
 
