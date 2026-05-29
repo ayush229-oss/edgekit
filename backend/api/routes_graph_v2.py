@@ -892,7 +892,7 @@ def graph_chat(
         kind, payload = _build_from_raw(raw)
 
     if kind == "graph":
-        return {"type": "graph", "graph": payload}
+        return {"type": "graph", "graph": payload, "decisions": _graph_decisions(payload)}
     if kind == "message":
         return {"type": "message", "content": payload}
     # Still invalid after repair attempts — be honest instead of looping.
@@ -942,6 +942,39 @@ def _parse_model_json(raw_text: str) -> Optional[Dict[str, Any]]:
         if obj is not None:
             return obj
     return None
+
+
+def _graph_decisions(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Summarize the settings the AI chose, in plain language, so the user can
+    SEE every variable the engine decided (and know they're editable on canvas).
+
+    One entry per node with tunable params: {node_id, node_label, lane,
+    settings:[{key, label, value, default, is_default}]}.
+    """
+    out: List[Dict[str, Any]] = []
+    for n in graph.get("nodes", []):
+        spec = NODE_LIBRARY.get(n.get("type"))
+        if not spec or not spec.params:
+            continue
+        params = n.get("params") or {}
+        settings = []
+        for pspec in spec.params:
+            key = pspec["key"]
+            val = params.get(key, pspec.get("default"))
+            settings.append({
+                "key":        key,
+                "label":      pspec.get("label", key),
+                "value":      val,
+                "default":    pspec.get("default"),
+                "is_default": val == pspec.get("default"),
+            })
+        out.append({
+            "node_id":    n.get("id"),
+            "node_label": spec.label,
+            "lane":       spec.lane,
+            "settings":   settings,
+        })
+    return out
 
 
 def _layout_graph(graph: Dict[str, Any]) -> None:

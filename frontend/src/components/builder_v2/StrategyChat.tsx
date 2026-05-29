@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   v2Chat, hasUserAIKey, getAIProvider, getAIModel, setAIModel, AI_MODEL_OPTIONS,
-  type ChatMessage, type V2Graph,
+  type ChatMessage, type V2Graph, type GraphDecision,
 } from "@/lib/api";
 import Link from "next/link";
 
@@ -39,6 +39,7 @@ export function StrategyChat({
   const [input,     setInput]     = useState("");
   const [busy,      setBusy]      = useState(false);
   const [graph,     setGraph]     = useState<V2Graph | null>(null);
+  const [decisions, setDecisions] = useState<GraphDecision[]>([]);
   const [err,       setErr]       = useState<string | null>(null);
   const [hasKey,    setHasKey]    = useState(false);
   const [provider,  setProvider]  = useState("gemini");
@@ -71,6 +72,7 @@ export function StrategyChat({
     setMessages([]);
     setInput("");
     setGraph(null);
+    setDecisions([]);
     setErr(null);
   }
 
@@ -97,6 +99,7 @@ export function StrategyChat({
       });
       if (res.type === "graph") {
         setGraph(res.graph);
+        setDecisions(res.decisions ?? []);
         setMessages((m) => [
           ...m,
           {
@@ -222,6 +225,31 @@ export function StrategyChat({
 
           <div ref={bottomRef} />
         </div>
+
+        {/* "Here's what I decided" — the variables the AI auto-picked */}
+        {graph && decisions.length > 0 && (
+          <div className="mx-5 mb-2 shrink-0 rounded-xl border border-border bg-paper px-4 py-3 max-h-[180px] overflow-y-auto">
+            <div className="text-[11px] font-semibold text-ink mb-1.5">
+              Here's what I set <span className="font-normal text-muted">— edit any of these on the canvas after loading</span>
+            </div>
+            <div className="space-y-1.5">
+              {decisions.map((d) => (
+                <div key={d.node_id} className="text-[11.5px]">
+                  <span className="font-medium text-ink">{d.node_label}</span>
+                  <span className="text-muted">
+                    {": "}
+                    {d.settings.map((s, j) => (
+                      <span key={s.key}>
+                        {j > 0 ? ", " : ""}
+                        {s.label} = <span className={s.is_default ? "text-muted" : "text-money font-medium"}>{String(s.value)}</span>
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Graph preview bar (when AI has built a graph) */}
         {graph && (

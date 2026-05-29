@@ -398,9 +398,17 @@ export async function v2FromText(body: { description: string; symbol?: string; t
 }
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export type GraphDecisionSetting = {
+  key: string; label: string; value: any; default: any; is_default: boolean;
+};
+export type GraphDecision = {
+  node_id: string; node_label: string; lane: string;
+  settings: GraphDecisionSetting[];
+};
 export type ChatResponse =
   | { type: "message"; content: string }
-  | { type: "graph"; graph: V2Graph };
+  | { type: "graph"; graph: V2Graph; decisions?: GraphDecision[] };
 
 export async function v2Chat(body: {
   messages:  ChatMessage[];

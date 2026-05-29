@@ -15,7 +15,7 @@
  *
  * Numbers match Edgekit's backtest exactly — same simulator, same bars.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createChart,
   CandlestickSeries,
@@ -186,6 +186,9 @@ export function ChartPreview({
   const [showRibbon,     setShowRibbon]     = useState(false);
   const [showIndicators, setShowIndicators] = useState(true);
   const [showStructures, setShowStructures] = useState(true);
+  // Replay: null = live (show all); a number = playhead bar index
+  const [replayIdx, setReplayIdx] = useState<number | null>(null);
+  const [playing,   setPlaying]   = useState(false);
 
   const TF_OPTIONS = ["M5", "M15", "M30", "H1", "H4", "D1"];
 
@@ -577,6 +580,46 @@ export function ChartPreview({
   }, [selIdx, data, mgmt.target_r]);
 
 
+  // ── Replay: advance the playhead while playing ───────────────────────
+  useEffect(() => {
+    if (!playing || !data) return;
+    const id = setInterval(() => {
+      setReplayIdx((cur) => {
+        const max = data.bars.length - 1;
+        const next = (cur == null ? 0 : cur) + 1;
+        if (next >= max) { setPlaying(false); return max; }
+        return next;
+      });
+    }, 140);
+    return () => clearInterval(id);
+  }, [playing, data]);
+
+  // ── Replay: scroll the chart so the playhead sits at the right edge ──
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !data || data.bars.length === 0) return;
+    if (replayIdx == null) { chart.timeScale().fitContent(); return; }
+    const from = data.bars[Math.max(0, replayIdx - 120)];
+    const to   = data.bars[replayIdx];
+    if (from && to) {
+      chart.timeScale().setVisibleRange({ from: from.t as UTCTimestamp, to: to.t as UTCTimestamp });
+    }
+  }, [replayIdx, data]);
+
+  // What's happening at the playhead bar — the "why did/didn't it trade here" readout
+  const replayInfo = useMemo(() => {
+    if (replayIdx == null || !data) return null;
+    const b = data.bars[replayIdx];
+    if (!b) return null;
+    const entries = data.trades.filter((t) => (t.fill_idx ?? t.signal_idx) === replayIdx);
+    const exits   = data.trades.filter((t) => t.exit_idx === replayIdx);
+    const zones   = (data.artifacts ?? []).filter(
+      (a) => a.kind === "zone" && a.from_idx != null && a.to_idx != null
+             && a.from_idx <= replayIdx && replayIdx <= (a.to_idx as number));
+    const levels  = (data.artifacts ?? []).filter((a) => a.kind === "level" && a.at_idx === replayIdx);
+    return { b, entries, exits, zones, levels };
+  }, [replayIdx, data]);
+
   if (!open) return null;
 
   const wins   = data?.trades.filter((t) => t.result === "Win").length  ?? 0;
@@ -715,6 +758,37 @@ export function ChartPreview({
             )}
             <div ref={containerRef} className="w-full h-full" />
 
+            {/* Replay readout — what's happening at the playhead bar */}
+            {replayInfo && (
+              <div className="absolute top-3 right-3 z-10 bg-cream2 border border-border rounded-lg shadow-md px-3 py-2 text-[11px] max-w-[260px]">
+                <div className="font-semibold text-ink mb-1">
+                  Bar {(replayIdx ?? 0) + 1} · {new Date((replayInfo.b.t as number) * 1000).toUTCString().slice(5, 22)}
+                </div>
+                <div className="font-mono text-muted mb-1">
+                  O {replayInfo.b.o.toFixed(2)} · H {replayInfo.b.h.toFixed(2)} · L {replayInfo.b.l.toFixed(2)} · C {replayInfo.b.c.toFixed(2)}
+                </div>
+                <div className="space-y-0.5">
+                  {replayInfo.entries.map((t, k) => (
+                    <div key={`e${k}`} className="font-medium" style={{ color: t.direction === "Bull" ? C.sage : C.terra }}>
+                      {t.direction === "Bull" ? "▲ Long entry" : "▼ Short entry"} @ {t.entry.toFixed(2)}
+                    </div>
+                  ))}
+                  {replayInfo.exits.map((t, k) => (
+                    <div key={`x${k}`} className="text-ink">✕ Exit ({t.exit_type || t.result}) · {t.pnl_r >= 0 ? "+" : ""}{t.pnl_r.toFixed(2)}R</div>
+                  ))}
+                  {replayInfo.levels.map((a, k) => (
+                    <div key={`l${k}`} className="text-amber-900">⚑ {a.label}</div>
+                  ))}
+                  {replayInfo.zones.length > 0 && (
+                    <div className="text-muted">In {replayInfo.zones.length} active zone{replayInfo.zones.length > 1 ? "s" : ""}</div>
+                  )}
+                  {replayInfo.entries.length === 0 && replayInfo.exits.length === 0 && replayInfo.levels.length === 0 && (
+                    <div className="text-muted italic">No trade here — waiting for a setup.</div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Floating overlay: selected trade detail */}
             {selTrade && (
               <div className="absolute top-3 left-3 z-10 bg-cream2 border border-border rounded-lg shadow-md px-3 py-2 text-[11px] max-w-[280px]">
@@ -796,6 +870,34 @@ export function ChartPreview({
             </div>
           )}
         </div>
+
+        {/* ── Replay controls ──────────────────────────────────────────── */}
+        {data && data.bars.length > 0 && (
+          <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/40 flex items-center gap-3">
+            <button
+              onClick={() => { if (replayIdx == null) setReplayIdx(0); setPlaying((p) => !p); }}
+              className="text-xs px-3 py-1 rounded-md bg-ink text-cream font-medium hover:opacity-90 transition-opacity shrink-0">
+              {playing ? "⏸ Pause" : "▶ Play"}
+            </button>
+            <input
+              type="range" min={0} max={data.bars.length - 1}
+              value={replayIdx ?? data.bars.length - 1}
+              onChange={(e) => { setPlaying(false); setReplayIdx(parseInt(e.target.value)); }}
+              className="flex-1 accent-sage"
+              title="Scrub through the strategy bar-by-bar"
+            />
+            <span className="text-[10px] text-muted font-mono w-28 text-right shrink-0">
+              {replayIdx == null ? "Live (all bars)" : `bar ${replayIdx + 1} / ${data.bars.length}`}
+            </span>
+            {replayIdx != null && (
+              <button
+                onClick={() => { setReplayIdx(null); setPlaying(false); }}
+                className="text-xs px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-cream shrink-0">
+                Reset
+              </button>
+            )}
+          </div>
+        )}
 
         {/* ── Legend ───────────────────────────────────────────────────── */}
         <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/50 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted">
