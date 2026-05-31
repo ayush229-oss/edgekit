@@ -182,14 +182,19 @@ function BuilderInner() {
     trail_params:     { buf_pips: 1 },
   });
 
-  const [challengeEnabled, setChallengeEnabled] = useState(false);
-  const [challengeParams, setChallengeParams] = useState<ChallengeParams>({
-    account_size:         10000,
-    daily_loss_limit_pct: 5,
-    max_drawdown_pct:     10,
-    profit_target_pct:    10,
-    min_trading_days:     4,
+  const [challengeEnabled, setChallengeEnabled] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem("ek_challenge_enabled") ?? "false"); } catch { return false; }
   });
+  const [challengeParams, setChallengeParams] = useState<ChallengeParams>(() => {
+    try {
+      const saved = localStorage.getItem("ek_challenge_params");
+      return saved ? JSON.parse(saved) : { account_size: 10000, daily_loss_limit_pct: 5, max_drawdown_pct: 10, profit_target_pct: 10, min_trading_days: 4 };
+    } catch { return { account_size: 10000, daily_loss_limit_pct: 5, max_drawdown_pct: 10, profit_target_pct: 10, min_trading_days: 4 }; }
+  });
+
+  // Persist challenge settings to localStorage
+  useEffect(() => { localStorage.setItem("ek_challenge_enabled", JSON.stringify(challengeEnabled)); }, [challengeEnabled]);
+  useEffect(() => { localStorage.setItem("ek_challenge_params",  JSON.stringify(challengeParams));  }, [challengeParams]);
 
   // ── Bootstrap: library + templates + symbols ──────────────────────────
   useEffect(() => {
