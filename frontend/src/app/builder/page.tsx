@@ -322,7 +322,10 @@ function BuilderInner() {
 
 
   // ── Canvas handlers ────────────────────────────────────────────────────
-  const onNodesChange = useCallback((c: NodeChange[]) => setNodes((ns) => applyNodeChanges(c, ns)), []);
+  const onNodesChange = useCallback((c: NodeChange[]) => {
+    if (applyingRef.current) return;   // ignore ReactFlow's reconciliation during undo/redo
+    setNodes((ns) => applyNodeChanges(c, ns));
+  }, []);
   const onEdgesChange = useCallback((c: EdgeChange[]) => setEdges((es) => applyEdgeChanges(c, es)), []);
   const onConnect     = useCallback((c: Connection) => {
     setEdges((es) => addEdge({ ...c, animated: true, style: { strokeWidth: 2 } }, es));
@@ -485,7 +488,6 @@ function BuilderInner() {
       return;
     }
     if (applyingRef.current) {
-      applyingRef.current = false;
       lastSnapRef.current = { nodes, edges };
       return;
     }
@@ -507,6 +509,8 @@ function BuilderInner() {
     lastSnapRef.current = prev;
     setNodes(prev.nodes); setEdges(prev.edges); setSelectedId(null);
     setHistVer((v) => v + 1);
+    // Reset after debounce window — keeps onNodesChange blocked while ReactFlow reconciles
+    setTimeout(() => { applyingRef.current = false; }, 500);
   }
 
   function redo() {
@@ -517,6 +521,7 @@ function BuilderInner() {
     lastSnapRef.current = nxt;
     setNodes(nxt.nodes); setEdges(nxt.edges); setSelectedId(null);
     setHistVer((v) => v + 1);
+    setTimeout(() => { applyingRef.current = false; }, 500);
   }
 
   // Keyboard: Delete / Backspace to remove selected node — ignored while typing in inputs.
