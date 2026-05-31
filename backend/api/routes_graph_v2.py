@@ -22,8 +22,9 @@ from backend.engine.core import (
     load_mt5, simulate, compute_metrics, infer_pip_from_df, validate_ohlcv,
     data_source_of,
 )
+from backend.engine.core.metrics import compute_challenge_result
 from backend.api import store
-from backend.api.schemas import BacktestResponse, BacktestMetrics
+from backend.api.schemas import BacktestResponse, BacktestMetrics, ChallengeParams, ChallengeResult, ChallengeDayResult
 from backend.db import get_db, BacktestRun
 
 
@@ -1163,6 +1164,7 @@ class GraphBacktestV2Request(BaseModel):
     max_concurrent:   int   = 1
     order_expiry:     Optional[int] = None
     session_hours:    Optional[Tuple[int, int]] = None
+    challenge:        Optional[ChallengeParams] = None
 
 
 @router.post("/backtest", response_model=BacktestResponse)
@@ -1245,6 +1247,28 @@ def run_v2_backtest(
         except Exception:
             db.rollback()
 
+    # Optional prop firm challenge analysis
+    challenge_result = None
+    if req.challenge is not None:
+        cr = compute_challenge_result(
+            tdf, df,
+            req.challenge.model_dump(),
+            risk_pct     = req.risk_pct,
+            max_risk_usd = req.max_risk_usd,
+        )
+        if cr is not None:
+            challenge_result = ChallengeResult(
+                passed         = cr["passed"],
+                verdict        = cr["verdict"],
+                failure_rule   = cr.get("failure_rule"),
+                failure_day    = cr.get("failure_day"),
+                profit_hit_day = cr.get("profit_hit_day"),
+                trading_days   = cr["trading_days"],
+                final_equity   = cr["final_equity"],
+                account_size   = cr["account_size"],
+                daily          = [ChallengeDayResult(**d) for d in cr["daily"]],
+            )
+
     return BacktestResponse(
         strategy_id  = "graph_v2:custom",
         data_range   = (df["time"].iloc[0].isoformat(), df["time"].iloc[-1].isoformat()),
@@ -1268,4 +1292,5 @@ def run_v2_backtest(
         pnl_series   = m["pnl"].tolist(),
         issues       = validate_ohlcv(df),
         data_source  = data_source_of(df),
+        challenge    = challenge_result,
     )

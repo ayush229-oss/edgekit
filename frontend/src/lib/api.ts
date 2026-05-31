@@ -35,6 +35,31 @@ export type BacktestMetrics = {
   exit_counts: Record<string, number>;
 };
 
+export type ChallengeParams = {
+  account_size:         number;  // e.g. 10000
+  daily_loss_limit_pct: number;  // e.g. 5
+  max_drawdown_pct:     number;  // e.g. 10
+  profit_target_pct:    number;  // e.g. 10
+  min_trading_days:     number;  // e.g. 4
+};
+
+export type ChallengeDayResult = {
+  date: string; pnl_usd: number; equity: number;
+  status: "ok" | "fail" | "target_hit";
+};
+
+export type ChallengeResult = {
+  passed:          boolean;
+  verdict:         string;
+  failure_rule?:   string;
+  failure_day?:    string;
+  profit_hit_day?: string;
+  trading_days:    number;
+  final_equity:    number;
+  account_size:    number;
+  daily:           ChallengeDayResult[];
+};
+
 export type DataSource = {
   provider?: string;   // "mt5" | "yahoo" | "unknown"
   via?:      string;   // "terminal" | "bridge" | "fallback"
@@ -52,6 +77,7 @@ export type BacktestResponse = {
   pnl_series:   number[];
   issues: Record<string, any>;
   data_source?: DataSource;
+  challenge?: ChallengeResult;
 };
 
 export async function listStrategies(): Promise<StrategySummary[]> {

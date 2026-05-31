@@ -98,6 +98,35 @@ class BacktestResponse(BaseModel):
     issues:       dict[str, Any] = Field(default_factory=dict)
     # Which data actually fed the run, e.g. {"provider":"mt5","label":"MT5 · XAUUSD"}.
     data_source:  dict[str, Any] = Field(default_factory=dict)
+    challenge:    Optional[ChallengeResult] = None
+
+
+# ─── Prop firm challenge ─────────────────────────────────────────────────────
+class ChallengeParams(BaseModel):
+    account_size:          float = 10000.0   # e.g. $10,000 challenge account
+    daily_loss_limit_pct:  float = 5.0       # max daily loss as % of account
+    max_drawdown_pct:      float = 10.0      # max total drawdown as % of account
+    profit_target_pct:     float = 10.0      # profit target as % of account
+    min_trading_days:      int   = 4         # minimum days that must be traded
+
+
+class ChallengeDayResult(BaseModel):
+    date:      str
+    pnl_usd:   float
+    equity:    float
+    status:    str   # "ok" | "fail" | "target_hit"
+
+
+class ChallengeResult(BaseModel):
+    passed:          bool
+    verdict:         str
+    failure_rule:    Optional[str] = None
+    failure_day:     Optional[str] = None
+    profit_hit_day:  Optional[str] = None
+    trading_days:    int
+    final_equity:    float
+    account_size:    float
+    daily:           List[ChallengeDayResult]
 
 
 # ─── CSV upload ──────────────────────────────────────────────────────────────

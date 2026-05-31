@@ -48,6 +48,8 @@ import { StrategyLogicBox }      from "@/components/builder_v2/StrategyLogicBox"
 import { NextStepsPanel }        from "@/components/builder_v2/NextStepsPanel";
 import { MetricsPanel }          from "@/components/MetricsPanel";
 import { TradeManagement, type TradeMgmt } from "@/components/TradeManagement";
+import { PropFirmPanel }         from "@/components/PropFirmPanel";
+import type { ChallengeParams }  from "@/lib/api";
 
 // Lazy-load heavy/modal-only components so they don't block initial paint.
 const EquityChart = dynamic(
@@ -178,6 +180,15 @@ function BuilderInner() {
     trail_mode:       "candle",
     trail_start:      "after_target",
     trail_params:     { buf_pips: 1 },
+  });
+
+  const [challengeEnabled, setChallengeEnabled] = useState(false);
+  const [challengeParams, setChallengeParams] = useState<ChallengeParams>({
+    account_size:         10000,
+    daily_loss_limit_pct: 5,
+    max_drawdown_pct:     10,
+    profit_target_pct:    10,
+    min_trading_days:     4,
   });
 
   // ── Bootstrap: library + templates + symbols ──────────────────────────
@@ -626,6 +637,7 @@ function BuilderInner() {
         trail_mode:       mgmt.trail_mode,
         trail_start:      mgmt.trail_start,
         trail_params:     mgmt.trail_params,
+        challenge:        challengeEnabled ? challengeParams : undefined,
       });
       setResult(res);
       setStale(false);
@@ -1042,6 +1054,13 @@ function BuilderInner() {
           <div className="border-t border-border p-3">
             <TradeManagement mgmt={mgmt} onChange={setMgmt} />
           </div>
+          <PropFirmPanel
+            enabled={challengeEnabled}
+            params={challengeParams}
+            result={result?.challenge ?? undefined}
+            onToggle={() => { setChallengeEnabled((v) => !v); setStale(true); }}
+            onChange={(p) => { setChallengeParams(p); setStale(true); }}
+          />
           {err && <div className="px-5 pb-3 text-xs text-terra">{err}</div>}
         </div>
       </div>
