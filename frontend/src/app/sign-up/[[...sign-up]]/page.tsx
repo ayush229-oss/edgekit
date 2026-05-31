@@ -16,7 +16,7 @@ export default function SignUpPage() {
 
       <SignUp
         signInUrl="/sign-in"
-        forceRedirectUrl="/builder?template=blank"
+        forceRedirectUrl="/onboarding"
         appearance={{
           elements: {
             rootBox:         "w-full max-w-md",

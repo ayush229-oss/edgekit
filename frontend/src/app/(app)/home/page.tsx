@@ -4,24 +4,24 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 const FEATURES = [
   {
-    icon: "⚡",
-    title: "Backtests in seconds",
-    body: "Run years of market data in under 2 seconds. Change a parameter, instantly see new results.",
-  },
-  {
-    icon: "🎛️",
-    title: "Tune with sliders, not code",
-    body: "Every strategy parameter is an adjustable knob. Drag and see results update. No code. No Python. No Pine.",
+    icon: "🎯",
+    title: "Validate before you risk",
+    body: "Test your strategy on years of real market data before you put a dollar on the line. Know if your edge is real — not just in your head.",
   },
   {
     icon: "🧩",
-    title: "Visual node builder",
-    body: "Wire trading logic like Lego. Signal nodes, filter nodes, risk nodes — snap them together, run the backtest.",
+    title: "No code, no vagueness",
+    body: "Wire your rules as nodes — entry signal, filter, stop loss, take profit. If you can't express it as a node, it's not a rule, it's a feeling.",
   },
   {
-    icon: "📤",
-    title: "Export to TradingView",
-    body: "When your strategy works on paper, export as Pine Script v6 in one click and take it live.",
+    icon: "🔁",
+    title: "Iterate until it holds up",
+    body: "Run 20 variations in minutes. Tune a parameter, re-run, watch the equity curve react. Find what actually works.",
+  },
+  {
+    icon: "📋",
+    title: "Forward test before you fund",
+    body: "Paper test on unseen bars to confirm your system isn't curve-fitted. Only then fund it — with a prop firm or your own capital.",
   },
 ];
 
@@ -101,7 +101,7 @@ export default async function AppHome() {
         <p className="text-[11px] uppercase tracking-[0.25em] text-money font-semibold mb-2">Dashboard</p>
         <h1 className="text-[32px] font-bold tracking-tight text-ink">Good to have you here.</h1>
         <p className="text-muted mt-2 text-[15px]">
-          Edgekit helps you find strategies that actually work — before you risk a single rupee.
+          Build a strategy. Test it on real data. Forward test it. Only then trade it.
         </p>
       </div>
 
@@ -116,6 +116,26 @@ export default async function AppHome() {
         ))}
       </div>
 
+      {/* ── First-backtest nudge (only for new users) ──────────────────────── */}
+      {stats?.backtestsRun === 0 && (
+        <div className="rounded-2xl border border-money/30 bg-money/5 p-6 flex flex-col sm:flex-row sm:items-center gap-5">
+          <div className="text-4xl shrink-0">🎯</div>
+          <div className="flex-1">
+            <h2 className="font-semibold text-[17px] text-ink mb-1">Run your first backtest</h2>
+            <p className="text-[13px] text-muted leading-relaxed">
+              You haven't tested a strategy yet. Pick a template, hit Run, and see your actual win rate
+              on real market data — in under 2 seconds.
+            </p>
+          </div>
+          <Link
+            href="/builder?template=ema_cross"
+            className="btn-primary text-[13px] px-5 py-2.5 shrink-0 whitespace-nowrap"
+          >
+            Start now →
+          </Link>
+        </div>
+      )}
+
       {/* ── Start strategy ─────────────────────────────────────────────────── */}
       <Link
         href="/strategies"
@@ -124,11 +144,11 @@ export default async function AppHome() {
         <div className="text-5xl shrink-0">🧩</div>
         <div className="flex-1">
           <h2 className="font-semibold text-[20px] text-ink group-hover:text-money transition-colors mb-2">
-            Start a strategy
+            Build or pick a strategy
           </h2>
           <p className="text-[13.5px] text-muted leading-relaxed">
-            Open a proven node graph — Donchian, Ichimoku, SMC, RSI+Bollinger, EMA Cross, and more —
-            or start with a blank canvas. Tune, re-run, make it yours.
+            Start from a proven system — EMA Cross, OB+FVG, RSI Mean Reversion, Donchian Breakout, and more —
+            or wire your own from scratch. No code. Just nodes.
           </p>
         </div>
         <div className="text-[13px] text-money font-medium shrink-0">Browse templates →</div>
@@ -136,7 +156,7 @@ export default async function AppHome() {
 
       {/* ── What Edgekit does ──────────────────────────────────────────────── */}
       <div className="card p-8">
-        <h2 className="text-[18px] font-semibold mb-6">What Edgekit does</h2>
+        <h2 className="text-[18px] font-semibold mb-6">The systematic trading loop</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           {FEATURES.map((f) => (
             <div key={f.title} className="flex gap-4">
