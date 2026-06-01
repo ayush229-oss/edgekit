@@ -250,26 +250,25 @@ def run_backtest(
     if m is None:
         raise HTTPException(422, "No resolved trades — loosen the parameters.")
 
-    # Persist the run for logged-in users
-    if user is not None:
-        try:
-            run_row = BacktestRun(
-                user_id         = user.id,
-                strategy_id     = req.strategy_id,
-                params_snapshot = {**params, "tps": tps or params.get("tps") or []},
-                metrics         = {
-                    "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
-                    "total_r": m["total_r"], "profit_factor":
-                        (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
-                    "max_dd": m["max_dd"], "final_equity": m["final_equity"],
-                },
-                symbol    = req.symbol,
-                timeframe = req.timeframe,
-                bars      = len(df),
-            )
-            db.add(run_row); db.commit()
-        except Exception:
-            db.rollback()    # don't fail the request just because logging broke
+    # Persist the run — always, so global stats count every backtest
+    try:
+        run_row = BacktestRun(
+            user_id         = user.id if user is not None else None,
+            strategy_id     = req.strategy_id,
+            params_snapshot = {**params, "tps": tps or params.get("tps") or []},
+            metrics         = {
+                "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
+                "total_r": m["total_r"], "profit_factor":
+                    (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
+                "max_dd": m["max_dd"], "final_equity": m["final_equity"],
+            },
+            symbol    = req.symbol,
+            timeframe = req.timeframe,
+            bars      = len(df),
+        )
+        db.add(run_row); db.commit()
+    except Exception:
+        db.rollback()    # don't fail the request just because logging broke
 
     return BacktestResponse(
         strategy_id  = req.strategy_id,

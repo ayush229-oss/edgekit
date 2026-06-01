@@ -57,7 +57,7 @@ class SavedStrategy(Base):
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
     id              = Column(Integer, primary_key=True)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id         = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     strategy_id     = Column(String(64), nullable=False, index=True)
     params_snapshot = Column(JSON, default=dict, nullable=False)
     metrics         = Column(JSON, default=dict, nullable=False)

@@ -1229,23 +1229,23 @@ def run_v2_backtest(
     if m is None:
         raise HTTPException(422, "No resolved trades — loosen parameters or check graph wiring.")
 
-    if user is not None:
-        try:
-            db.add(BacktestRun(
-                user_id         = user.id,
-                strategy_id     = "graph_v2:" + (graph.get("name") or "custom"),
-                params_snapshot = {"graph": graph},
-                metrics         = {
-                    "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
-                    "total_r": m["total_r"],
-                    "profit_factor": (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
-                    "max_dd": m["max_dd"], "final_equity": m["final_equity"],
-                },
-                symbol = req.symbol, timeframe = req.timeframe, bars = len(df),
-            ))
-            db.commit()
-        except Exception:
-            db.rollback()
+    # Persist the run — always, so global stats count every backtest
+    try:
+        db.add(BacktestRun(
+            user_id         = user.id if user is not None else None,
+            strategy_id     = "graph_v2:" + (graph.get("name") or "custom"),
+            params_snapshot = {"graph": graph},
+            metrics         = {
+                "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
+                "total_r": m["total_r"],
+                "profit_factor": (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
+                "max_dd": m["max_dd"], "final_equity": m["final_equity"],
+            },
+            symbol = req.symbol, timeframe = req.timeframe, bars = len(df),
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
 
     # Optional prop firm challenge analysis
     challenge_result = None
