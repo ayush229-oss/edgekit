@@ -21,7 +21,8 @@
  * Run button glows sage when results are stale.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
 import nextDynamic from "next/dynamic";
 import ReactFlow, {
@@ -141,6 +142,7 @@ function BuilderInner() {
   const [paletteMin, setPaletteMin] = useState(false);
   const [navOpen,    setNavOpen]    = useState(false);   // builder page-nav menu
   const [varsOpen,   setVarsOpen]   = useState(false);   // variables (nodes) dropdown
+  const [moreOpen,   setMoreOpen]   = useState(false);   // ⋯ overflow menu
   const [stashedNodes, setStashedNodes] = useState<{ node: Node; edges: Edge[] }[]>([]);  // disabled variables
   const [fwdMsg,     setFwdMsg]     = useState<string | null>(null);   // forward-test feedback
   const [logicHidden, setLogicHidden] = useState(true);
@@ -804,16 +806,17 @@ function BuilderInner() {
       />
 
       {/* ── Top bar ────────────────────────────────────────────────── */}
-      <div className="bg-cream2 border-b border-border px-4 py-2.5 flex items-center gap-3 shrink-0">
-        {/* Page navigation (builder is outside the (app) sidebar layout) */}
+      <div className="bg-cream2 border-b border-border px-3 py-2 flex items-center gap-2 shrink-0">
+
+        {/* Nav logo */}
         <div className="relative shrink-0">
           <button
             onClick={() => setNavOpen((v) => !v)}
             onBlur={() => setTimeout(() => setNavOpen(false), 150)}
             title="Menu"
-            className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-lg hover:bg-cream transition-colors">
+            className="flex items-center gap-1 pl-1 pr-1.5 py-1 rounded-lg hover:bg-cream transition-colors">
             <span className="w-6 h-6 rounded-md bg-ink text-cream2 flex items-center justify-center font-bold text-[12px]">E</span>
-            <span className="text-muted text-xs">▾</span>
+            <span className="text-muted text-[10px]">▾</span>
           </button>
           {navOpen && (
             <div className="absolute left-0 top-full mt-1 z-50 w-44 bg-cream2 border border-border rounded-lg shadow-lg py-1">
@@ -833,131 +836,171 @@ function BuilderInner() {
             </div>
           )}
         </div>
+
         <div className="w-px h-5 bg-border shrink-0" />
 
+        {/* Strategy name */}
         <input value={name} onChange={(e) => setName(e.target.value)}
-          className="bg-transparent text-sm font-medium px-2 py-1 rounded hover:bg-cream focus:bg-cream focus:outline-none focus:ring-1 focus:ring-sage flex-1 max-w-sm" />
+          className="bg-transparent text-sm font-medium px-2 py-1 rounded hover:bg-cream focus:bg-cream focus:outline-none focus:ring-1 focus:ring-sage w-40 min-w-0" />
 
-        {/* Symbol — datalist gives autocomplete from the broker / common list,
-            but free-text override is always allowed for broker-specific suffixes
-            like ".cash", ".m", etc. */}
-        <div className="flex items-center gap-1">
-          <span className="text-[10px] uppercase tracking-widest text-muted">Symbol</span>
+        <div className="w-px h-5 bg-border shrink-0" />
+
+        {/* Backtest config: Symbol / TF / Bars — compact group */}
+        <div className="flex items-center gap-1.5 shrink-0">
           <input
             list="symbol-list"
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase().trim())}
             placeholder="XAUUSD"
             title={symbolSource === "mt5"
-              ? `${symbols.length} symbols available from your MT5 broker`
-              : `Showing ${symbols.length} common symbols. Connect MT5 to see broker-specific list. Free-text any symbol.`}
-            className="text-xs rounded bg-cream border border-border px-2 py-1 w-24 font-mono uppercase
-                       focus:outline-none focus:ring-1 focus:ring-sage" />
+              ? `${symbols.length} symbols from MT5 broker`
+              : `${symbols.length} common symbols. Free-type any symbol.`}
+            className="text-xs rounded bg-cream border border-border px-2 py-1 w-[84px] font-mono uppercase focus:outline-none focus:ring-1 focus:ring-sage" />
           <datalist id="symbol-list">
             {symbols.map((s) => (
               <option key={s.symbol} value={s.symbol}>{s.description}{s.category ? ` — ${s.category}` : ""}</option>
             ))}
           </datalist>
+          <select value={tf} onChange={(e) => setTf(e.target.value)}
+            className="text-xs rounded bg-cream border border-border px-1.5 py-1">
+            {["M1","M5","M15","M30","H1","H4","D1"].map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input type="number" value={bars} min={500} max={20000} step={500}
+            onChange={(e) => setBars(parseInt(e.target.value || "5000"))}
+            title="Number of bars to backtest"
+            className="text-xs rounded bg-cream border border-border px-2 py-1 w-[68px]" />
+          <ComplexityMeter c={complex} />
         </div>
 
-        <select value={tf} onChange={(e) => setTf(e.target.value)}
-          className="text-xs rounded bg-cream border border-border px-2 py-1">
-          {["M1","M5","M15","M30","H1","H4","D1"].map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <input type="number" value={bars} min={500} max={20000} step={500}
-          onChange={(e) => setBars(parseInt(e.target.value || "5000"))}
-          className="text-xs rounded bg-cream border border-border px-2 py-1 w-20" />
-        <ComplexityMeter c={complex} />
+        <div className="w-px h-5 bg-border shrink-0" />
 
-        {/* Undo / redo */}
-        <div className="flex items-center gap-1">
-          <button onClick={undo} disabled={historyRef.current.length === 0}
-            title="Undo (Ctrl+Z)"
-            className="text-xs px-2.5 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40">
-            ↶ Undo
-          </button>
-          <button onClick={redo} disabled={futureRef.current.length === 0}
-            title="Redo (Ctrl+Shift+Z)"
-            className="text-xs px-2.5 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40">
-            ↷ Redo
-          </button>
-        </div>
-
-        {/* Save strategy button */}
-        <button
-          onClick={() => { setSaveStratName(name); setSaveStratOpen(true); }}
-          disabled={nodes.length === 0}
-          title={nodes.length === 0 ? "Add nodes first" : savedStratId ? "Update saved strategy" : "Save strategy to your library"}
-          className="text-xs px-3 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40 flex items-center gap-1.5">
-          {savedStratId ? "💾 Update" : "💾 Save"}
+        {/* Undo / Redo — icon only */}
+        <button onClick={undo} disabled={historyRef.current.length === 0}
+          title="Undo (Ctrl+Z)"
+          className="w-7 h-7 rounded flex items-center justify-center text-sm border border-border hover:bg-cream transition-colors disabled:opacity-30">
+          ↶
+        </button>
+        <button onClick={redo} disabled={futureRef.current.length === 0}
+          title="Redo (Ctrl+Shift+Z)"
+          className="w-7 h-7 rounded flex items-center justify-center text-sm border border-border hover:bg-cream transition-colors disabled:opacity-30">
+          ↷
         </button>
 
-        <button onClick={() => setDescOpen(true)}
-          className="text-xs px-3 py-1.5 rounded bg-amber/30 border border-amber/40 text-amber-900 hover:bg-amber/40 transition-colors font-medium">
-          ✨ Describe strategy
-        </button>
-        <button onClick={() => setChartOpen(true)}
-          disabled={nodes.length === 0}
-          title={nodes.length === 0
-            ? "Build a strategy first, then preview it on the chart."
-            : "Preview the strategy on real bars with entry/exit markers."}
-          className="text-xs px-3 py-1.5 rounded bg-sky-100 border border-sky-200 text-sky-900 hover:bg-sky-200 transition-colors font-medium disabled:opacity-50">
-          📈 Preview chart
-        </button>
-        {/* Variables dropdown — toggle any node on/off; graph realigns */}
+        {/* Spacer pushes actions to the right */}
+        <div className="flex-1" />
+
+        {/* ⋯ More — Templates, Save, Variables, Preview chart */}
         <div className="relative shrink-0">
-          <button onClick={() => setVarsOpen((v) => !v)}
-            disabled={nodes.length === 0 && stashedNodes.length === 0}
-            title="Turn the strategy's variables on or off"
-            className="text-xs px-3 py-1.5 rounded border border-border hover:bg-cream transition-colors disabled:opacity-40 flex items-center gap-1">
-            Variables{stashedNodes.length > 0 ? ` (${stashedNodes.length} off)` : ""} ▾
+          <button
+            onClick={() => setMoreOpen((v) => !v)}
+            onBlur={() => setTimeout(() => setMoreOpen(false), 150)}
+            title="More options"
+            className="text-xs px-2.5 py-1.5 rounded border border-border hover:bg-cream transition-colors flex items-center gap-1 text-muted hover:text-ink">
+            ⋯
           </button>
-          {varsOpen && (
+          {moreOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setVarsOpen(false)} />
-              <div className="absolute right-0 top-full mt-1 z-50 w-72 bg-cream2 border border-border rounded-lg shadow-lg py-1 max-h-96 overflow-y-auto">
-                <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted">Variables in this strategy</div>
-                {nodes.map((n) => {
-                  const spec = (n.data as any).spec as V2NodeSpec;
-                  return (
-                    <label key={n.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-cream cursor-pointer">
-                      <input type="checkbox" checked onChange={() => disableVar(n.id)} className="accent-sage" />
-                      <span className="flex-1 truncate">{spec?.label ?? n.id}</span>
-                      <span className="text-[10px] text-muted">{spec?.lane}</span>
-                    </label>
-                  );
-                })}
-                {stashedNodes.map((d) => {
-                  const spec = (d.node.data as any).spec as V2NodeSpec;
-                  return (
-                    <label key={d.node.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-cream cursor-pointer opacity-70">
-                      <input type="checkbox" checked={false} onChange={() => enableVar(d.node.id)} className="accent-sage" />
-                      <span className="flex-1 truncate line-through">{spec?.label ?? d.node.id}</span>
-                      <span className="text-[10px] text-muted">off</span>
-                    </label>
-                  );
-                })}
-                {nodes.length === 0 && stashedNodes.length === 0 && (
-                  <div className="px-3 py-2 text-[11px] text-muted italic">No variables yet.</div>
+              <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-cream2 border border-border rounded-xl shadow-xl py-1.5">
+
+                {/* Templates */}
+                <button
+                  onClick={() => { setShowPicker(true); setMoreOpen(false); }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-ink hover:bg-cream transition-colors">
+                  <span className="w-6 h-6 rounded bg-surface flex items-center justify-center text-sm">📋</span>
+                  <div className="text-left">
+                    <div className="font-medium">Templates</div>
+                    <div className="text-muted text-[11px]">Start from a pre-built strategy</div>
+                  </div>
+                </button>
+
+                {/* Save strategy */}
+                <button
+                  onClick={() => { setSaveStratName(name); setSaveStratOpen(true); setMoreOpen(false); }}
+                  disabled={nodes.length === 0}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-ink hover:bg-cream transition-colors disabled:opacity-40">
+                  <span className="w-6 h-6 rounded bg-surface flex items-center justify-center text-sm">💾</span>
+                  <div className="text-left">
+                    <div className="font-medium">{savedStratId ? "Update strategy" : "Save strategy"}</div>
+                    <div className="text-muted text-[11px]">Save to your library</div>
+                  </div>
+                </button>
+
+                {/* Preview chart */}
+                <button
+                  onClick={() => { setChartOpen(true); setMoreOpen(false); }}
+                  disabled={nodes.length === 0}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-ink hover:bg-cream transition-colors disabled:opacity-40">
+                  <span className="w-6 h-6 rounded bg-surface flex items-center justify-center text-sm">📈</span>
+                  <div className="text-left">
+                    <div className="font-medium">Preview chart</div>
+                    <div className="text-muted text-[11px]">See entries/exits on real bars</div>
+                  </div>
+                </button>
+
+                {/* Export Pine Script */}
+                <button
+                  onClick={() => { setPineOpen(true); setMoreOpen(false); }}
+                  disabled={nodes.length === 0}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-ink hover:bg-cream transition-colors disabled:opacity-40">
+                  <span className="w-6 h-6 rounded bg-surface flex items-center justify-center text-sm">📊</span>
+                  <div className="text-left">
+                    <div className="font-medium">Export Pine Script</div>
+                    <div className="text-muted text-[11px]">Deploy to TradingView</div>
+                  </div>
+                </button>
+
+                {/* Variables — inline checklist */}
+                {(nodes.length > 0 || stashedNodes.length > 0) && (
+                  <>
+                    <div className="mx-3 my-1.5 border-t border-border" />
+                    <div className="px-3 pb-1 text-[10px] uppercase tracking-widest text-muted font-medium">
+                      Variables{stashedNodes.length > 0 ? ` · ${stashedNodes.length} off` : ""}
+                    </div>
+                    <div className="max-h-44 overflow-y-auto">
+                      {nodes.map((n) => {
+                        const spec = (n.data as any).spec as V2NodeSpec;
+                        return (
+                          <label key={n.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-cream cursor-pointer">
+                            <input type="checkbox" checked onChange={() => { disableVar(n.id); }} className="accent-sage shrink-0" />
+                            <span className="flex-1 truncate">{spec?.label ?? n.id}</span>
+                            <span className="text-[10px] text-muted shrink-0">{spec?.lane}</span>
+                          </label>
+                        );
+                      })}
+                      {stashedNodes.map((d) => {
+                        const spec = (d.node.data as any).spec as V2NodeSpec;
+                        return (
+                          <label key={d.node.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-cream cursor-pointer opacity-60">
+                            <input type="checkbox" checked={false} onChange={() => { enableVar(d.node.id); }} className="accent-sage shrink-0" />
+                            <span className="flex-1 truncate line-through">{spec?.label ?? d.node.id}</span>
+                            <span className="text-[10px] text-muted shrink-0">off</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
-                <div className="px-3 py-1.5 mt-1 text-[10px] text-muted border-t border-border">
-                  Add new variables from the palette on the left.
-                </div>
+
               </div>
             </>
           )}
         </div>
 
-        <button onClick={() => setShowPicker(true)}
-          className="text-xs px-3 py-1.5 rounded border border-border hover:bg-cream transition-colors">
-          Templates
+        {/* ✨ Describe strategy — hero AI feature, always visible */}
+        <button onClick={() => setDescOpen(true)}
+          className="text-xs px-3 py-1.5 rounded-lg bg-amber/30 border border-amber/40 text-amber-900 hover:bg-amber/45 transition-colors font-medium shrink-0">
+          ✨ Describe
         </button>
+
+        {/* ▶ Run backtest — primary CTA */}
         <button onClick={() => { setStale(true); void run(); }}
           disabled={busy || nodes.length === 0}
-          className={`text-sm px-4 py-1.5 rounded-md font-medium transition-colors disabled:opacity-50
-            ${stale && !busy ? "bg-sage text-cream2 hover:bg-sageMid"
-                            : "bg-cream2 text-muted border border-border hover:bg-cream"}`}>
-          {busy ? "Running…" : stale ? "Run backtest" : "Up to date ✓"}
+          className={`text-sm px-5 py-1.5 rounded-lg font-semibold transition-all disabled:opacity-40 shrink-0
+            ${stale && !busy
+              ? "bg-sage text-cream2 hover:bg-sageMid shadow-sm"
+              : "bg-cream border border-border text-muted hover:bg-cream3"}`}>
+          {busy ? "Running…" : stale ? "▶ Run" : "✓ Done"}
         </button>
       </div>
 
@@ -974,16 +1017,8 @@ function BuilderInner() {
 
         {/* Canvas */}
         <div className="flex-1 relative min-w-0">
-          {/* Floating emoji buttons — top-left corner of canvas */}
+          {/* Floating buttons — top-left corner of canvas */}
           <div className="absolute top-3 left-3 z-20 flex flex-col gap-2">
-            <button onClick={() => setPineOpen(true)}
-              disabled={nodes.length === 0}
-              title={nodes.length === 0
-                ? "Build a strategy first, then export it for TradingView."
-                : "Deploy to TradingView — copy generated Pine Script v6 to take this live. For iteration, use 📈 Preview chart instead."}
-              className="w-9 h-9 rounded-full bg-cream2 border border-border shadow-sm hover:bg-cream hover:border-sage flex items-center justify-center text-lg disabled:opacity-40">
-              📊
-            </button>
             <button onClick={() => setGuideOn((v) => !v)}
               title={guideOn ? "Hide inline guidance hints" : "Show inline guidance hints"}
               className={`w-9 h-9 rounded-full border shadow-sm flex items-center justify-center text-lg transition-colors
@@ -1219,6 +1254,19 @@ function BuilderInner() {
 
 
 export default function BuilderClient() {
+  const { isLoaded, isSignedIn } = useUser();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoaded && !isSignedIn) {
+      router.replace("/sign-in");
+    }
+  }, [isLoaded, isSignedIn, router]);
+
+  if (!isLoaded || !isSignedIn) {
+    return <div className="fixed inset-0 bg-cream" />;
+  }
+
   return (
     <Suspense fallback={<div className="p-8 text-muted text-sm">Loading builder…</div>}>
       <ReactFlowProvider>

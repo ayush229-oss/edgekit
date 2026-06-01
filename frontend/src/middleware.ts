@@ -12,7 +12,6 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 const isProtected = createRouteMatcher([
   "/home(.*)",
-  "/builder(.*)",
   "/forward(.*)",
   "/resources(.*)",
   "/analytics(.*)",
@@ -22,6 +21,8 @@ const isProtected = createRouteMatcher([
   "/affiliate(.*)",
   "/admin(.*)",
   "/strategy/(.*)",
+  // /builder is excluded — it uses ssr:false (ReactFlow) and has its own
+  // client-side auth check via useUser() that redirects to /sign-in.
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
