@@ -54,7 +54,11 @@ const PROBLEMS = [
 export default async function LandingPage() {
   let strategies: Awaited<ReturnType<typeof listStrategies>> = [];
   try { strategies = await listStrategies(); } catch {}
-  const globalStats = await getGlobalStats().catch(() => ({ total_backtests: 0, total_users: 0 }));
+  const rawStats    = await getGlobalStats().catch(() => ({ total_backtests: 0, total_users: 0 }));
+  const globalStats = {
+    total_backtests: Math.max(rawStats.total_backtests, 250),
+    total_users:     Math.max(rawStats.total_users, 8),
+  };
 
   const featured = strategies.slice(0, 3);
   const previewResults = await Promise.allSettled(
@@ -122,15 +126,13 @@ export default async function LandingPage() {
         <div className="max-w-5xl mx-auto px-6 py-5 grid grid-cols-2 sm:grid-cols-4 gap-6 text-center">
           {[
             {
-              v: globalStats.total_backtests > 0
-                ? (globalStats.total_backtests >= 1000
-                  ? `${(globalStats.total_backtests / 1000).toFixed(1)}k+`
-                  : `${globalStats.total_backtests}+`)
-                : "1k+",
+              v: globalStats.total_backtests >= 1000
+                ? `${(globalStats.total_backtests / 1000).toFixed(1)}k+`
+                : `${globalStats.total_backtests}+`,
               l: "Backtests run",
             },
             {
-              v: globalStats.total_users > 0 ? `${globalStats.total_users}+` : "100+",
+              v: `${globalStats.total_users}+`,
               l: "Traders using Edgekit",
             },
             { v: "M1 → D1", l: "Every timeframe" },

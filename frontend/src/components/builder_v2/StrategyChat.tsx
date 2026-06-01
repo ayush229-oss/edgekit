@@ -35,6 +35,15 @@ function clearChat(): void {
 }
 
 
+const STARTER_PROMPTS = [
+  "EMA 20 crosses above EMA 50 — buy, ATR stop, trail behind candles",
+  "RSI drops below 30 and bounces — buy, stop below swing low, 2R target",
+  "Donchian 20-bar breakout, ATR-sized position, turtle-style exit",
+  "SMC: liquidity sweep into order block entry, limit order, 3R target",
+  "Gold breaks above 20-day high, tight ATR stop, let winners run",
+  "MACD crossover above zero — buy, fixed 30-pip stop, 3R trail",
+];
+
 export function StrategyChat({
   open,
   onClose,
@@ -164,6 +173,38 @@ export function StrategyChat({
     }
   }
 
+  async function sendPrompt(text: string) {
+    setInput("");
+    setErr(null);
+    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(next);
+    setBusy(true);
+    try {
+      const res = await v2Chat({
+        messages: next, symbol, timeframe,
+        current_graph:  editing ? currentGraph : null,
+        result_summary: editing ? resultSummary : null,
+      });
+      if (res.type === "graph") {
+        setGraph(res.graph);
+        setDecisions(res.decisions ?? []);
+        setMessages((m) => [
+          ...m,
+          {
+            role:    "assistant",
+            content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes). Review it below and click "Load onto canvas" when you're happy.`,
+          },
+        ]);
+      } else {
+        setMessages((m) => [...m, { role: "assistant", content: res.content }]);
+      }
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleKey(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -255,6 +296,24 @@ export function StrategyChat({
               </div>
             </div>
           ))}
+
+          {/* Starter prompt chips — only shown on a fresh chat (greeting + no user turns) */}
+          {!editing && messages.length === 1 && messages[0].role === "assistant" && !busy && (
+            <div className="mt-1 ml-9">
+              <p className="text-[11px] text-muted mb-2 uppercase tracking-wide font-medium">Try an example</p>
+              <div className="flex flex-col gap-1.5">
+                {STARTER_PROMPTS.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => sendPrompt(p)}
+                    className="text-left text-[12.5px] px-3 py-2 rounded-xl border border-border bg-paper hover:bg-surface2 hover:border-money/40 transition-colors text-ink/80 hover:text-ink"
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {busy && (
             <div className="flex justify-start">

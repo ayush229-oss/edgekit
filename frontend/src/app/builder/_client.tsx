@@ -741,12 +741,23 @@ function BuilderInner() {
         <div className="fixed inset-0 z-50 bg-cream/95 backdrop-blur-sm flex items-center justify-center p-8">
           <div className="bg-cream2 border border-border rounded-2xl p-8 max-w-3xl w-full shadow-xl">
             <h2 className="text-2xl font-semibold mb-1">Start your strategy</h2>
-            <p className="text-sm text-muted mb-2">Pick a starter, or build from scratch.</p>
-            <GuidanceHint show={guideOn} tone="tip">
-              New here? Try <strong>Describe your strategy</strong> in the toolbar instead — write your idea in
-              plain English and we'll build the graph for you.
-            </GuidanceHint>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+            <p className="text-sm text-muted mb-4">Describe your idea in plain English, pick a starter template, or build from scratch.</p>
+
+            {/* ✨ Describe — hero option, always visible */}
+            <button
+              onClick={() => { setShowPicker(false); loadTemplate("blank"); setDescOpen(true); }}
+              className="w-full text-left rounded-xl border-2 border-amber/50 bg-amber/10 p-4 mb-3 hover:bg-amber/20 hover:border-amber/70 transition-all">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-base">✨</span>
+                <span className="font-semibold text-sm text-amber-900">Describe your strategy</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber/30 text-amber-800 font-medium uppercase tracking-wide">Recommended</span>
+              </div>
+              <div className="text-xs text-amber-800 leading-snug">
+                Type your idea in plain English — "buy when RSI bounces off 30, trail the winner". AI builds the graph for you in seconds.
+              </div>
+            </button>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button onClick={() => loadTemplate("blank")}
                 className="text-left rounded-xl border border-border bg-cream p-4 hover:border-sage hover:shadow-sm transition-all">
                 <div className="font-medium text-sm">Blank canvas</div>
