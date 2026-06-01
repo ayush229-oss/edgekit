@@ -1,29 +1,27 @@
 /**
  * Auth middleware — gates routes behind Clerk signin.
  *
- * Public:    /, /strategies, /sign-in, /sign-up, /api/* (the v2 Python proxy)
- * Protected: /builder, /resources, /analytics, /testimonials, /strategy/[id]
+ * Public:    /, /strategies, /sign-in, /sign-up, /waitlist, /api/* (the v2 Python proxy)
+ * Protected: everything inside (app) layout — /home, /builder, /forward, /resources,
+ *            /analytics, /upload, /suggestions, /affiliate, /admin, /strategy/[id]
  *
- * Note on /api: it forwards to the Python backend, which has its own auth
- * (X-Gemini-Key header etc.). We don't gate the proxy itself — that would
- * break public templates page (which fetches /api/strategies for previews).
+ * Note on /api: it forwards to the Python backend, which has its own auth.
+ * We don't gate the proxy itself so public pages (e.g. strategy previews) still work.
  */
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 const isProtected = createRouteMatcher([
+  "/home(.*)",
   "/builder(.*)",
+  "/forward(.*)",
   "/resources(.*)",
   "/analytics(.*)",
-  "/testimonials(.*)",
-  "/strategy/(.*)",
   "/upload(.*)",
   "/dashboard(.*)",
-  "/home(.*)",
-  "/strategies(.*)",
   "/suggestions(.*)",
   "/affiliate(.*)",
-  "/legal(.*)",
   "/admin(.*)",
+  "/strategy/(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

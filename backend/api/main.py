@@ -13,6 +13,11 @@ Run locally:
 """
 from __future__ import annotations
 from typing import Optional
+from pathlib import Path
+import dotenv  # type: ignore[import-untyped]
+
+# Load backend/.env before any module reads os.environ
+dotenv.load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 import io
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header, Request
