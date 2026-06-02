@@ -15,6 +15,13 @@ jobs:
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
 
+      - name: Validate Vercel token
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          echo "Token length: ${#VERCEL_TOKEN}"
+          vercel whoami --token "$VERCEL_TOKEN" 2>&1 || echo "WHOAMI FAILED"
+
       - name: Deploy to Vercel (production)
         working-directory: ./frontend
         env:
@@ -31,12 +38,6 @@ jobs:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
-      - name: Test port 22 connectivity
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          nc -zv "$VPS_HOST" 22 -w 5 && echo "Port 22 OK" || echo "Port 22 UNREACHABLE"
-
       - name: Setup SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -45,22 +46,30 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          echo "Key file lines: $(wc -l < ~/.ssh/deploy_key)"
+          ssh-keygen -l -f ~/.ssh/deploy_key 2>&1 || echo "INVALID KEY FORMAT"
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-          ls -la ~/.ssh/deploy_key
-          head -1 ~/.ssh/deploy_key
+
+      - name: Test SSH with verbose output
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -v -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            root@"$VPS_HOST" 'echo SSH_OK' 2>&1 | tail -30
 
       - name: Pull latest code on VPS and restart service
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: >
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -v root@"$VPS_HOST"
-          'set -e;
-          rm -rf /tmp/edgekit_deploy;
-          git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/edgekit_deploy;
-          cp -a /tmp/edgekit_deploy/backend/. /opt/edgekit/backend/;
-          cp /tmp/edgekit_deploy/pyproject.toml /opt/edgekit/pyproject.toml;
-          rm -rf /tmp/edgekit_deploy;
-          pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true;
-          systemctl restart edgekit-backend;
-          sleep 5;
-          systemctl is-active edgekit-backend || true'
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@"$VPS_HOST" 'bash -s' << 'ENDSSH'
+          set -e
+          rm -rf /tmp/edgekit_deploy
+          git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/edgekit_deploy
+          cp -a /tmp/edgekit_deploy/backend/. /opt/edgekit/backend/
+          cp /tmp/edgekit_deploy/pyproject.toml /opt/edgekit/pyproject.toml
+          rm -rf /tmp/edgekit_deploy
+          pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
+          systemctl restart edgekit-backend
+          sleep 5
+          systemctl is-active edgekit-backend || true
+          ENDSSH
