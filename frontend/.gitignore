@@ -5,4 +5,5 @@ out/
 .DS_Store
 *.log
 
-.vercel
+.vercel/*
+!.vercel/project.json
