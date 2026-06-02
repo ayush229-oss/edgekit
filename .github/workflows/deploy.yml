@@ -37,13 +37,15 @@ jobs:
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          # Diagnostics
+          echo "Key file size: $(wc -c < ~/.ssh/deploy_key) bytes"
+          head -1 ~/.ssh/deploy_key | grep -q "BEGIN" && echo "KEY TYPE: PRIVATE" || echo "KEY TYPE: NOT PRIVATE (possibly public key?)"
+          echo "VPS_HOST: $VPS_HOST"
 
-      - name: Test minimal SSH (no line continuation)
+      - name: Test minimal SSH
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@$VPS_HOST 'echo SSH_MINIMAL_OK'
-
-      - name: Pull latest code on VPS and restart service
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@$VPS_HOST 'rm -rf /tmp/ek && git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/ek && cp -a /tmp/ek/backend/. /opt/edgekit/backend/ && cp /tmp/ek/pyproject.toml /opt/edgekit/pyproject.toml && rm -rf /tmp/ek && pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null; systemctl restart edgekit-backend; sleep 5; systemctl is-active edgekit-backend || true'
+        run: |
+          echo "VPS_HOST is: $VPS_HOST"
+          echo "Key exists: $(ls -la ~/.ssh/deploy_key 2>/dev/null || echo MISSING)"
+          ssh -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes root@$VPS_HOST 'echo SSH_OK' 2>&1; echo "SSH exit: $?"
