@@ -6,6 +6,9 @@ on:
 
 jobs:
   # ── 1. Deploy frontend to Vercel ──────────────────────────────────────────
+  # Uses simple "vercel --prod --yes" (remote build on Vercel servers).
+  # project.json is committed so project linking is automatic.
+  # Env vars are set in the Vercel project settings dashboard.
   deploy-frontend:
     name: Frontend -> Vercel
     runs-on: ubuntu-latest
@@ -15,25 +18,16 @@ jobs:
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
 
-      - name: Validate Vercel token
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: |
-          echo "Token length: ${#VERCEL_TOKEN}"
-          vercel whoami --token "$VERCEL_TOKEN" 2>&1 || echo "WHOAMI FAILED"
-
       - name: Deploy to Vercel (production)
         working-directory: ./frontend
         env:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-        run: |
-          vercel pull --yes --environment=production --token "$VERCEL_TOKEN"
-          vercel build --prod --token "$VERCEL_TOKEN"
-          vercel deploy --prebuilt --prod --token "$VERCEL_TOKEN"
+        run: vercel --prod --yes --token "$VERCEL_TOKEN"
 
   # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
+  # SSH key auth confirmed working. Runs commands inline (no heredoc).
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
@@ -46,30 +40,11 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          echo "Key file lines: $(wc -l < ~/.ssh/deploy_key)"
-          ssh-keygen -l -f ~/.ssh/deploy_key 2>&1 || echo "INVALID KEY FORMAT"
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Test SSH with verbose output
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/deploy_key -v -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-            root@"$VPS_HOST" 'echo SSH_OK' 2>&1 | tail -30
 
       - name: Pull latest code on VPS and restart service
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@"$VPS_HOST" 'bash -s' << 'ENDSSH'
-          set -e
-          rm -rf /tmp/edgekit_deploy
-          git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/edgekit_deploy
-          cp -a /tmp/edgekit_deploy/backend/. /opt/edgekit/backend/
-          cp /tmp/edgekit_deploy/pyproject.toml /opt/edgekit/pyproject.toml
-          rm -rf /tmp/edgekit_deploy
-          pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
-          systemctl restart edgekit-backend
-          sleep 5
-          systemctl is-active edgekit-backend || true
-          ENDSSH
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@"$VPS_HOST" \
+            'rm -rf /tmp/ek && git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/ek && cp -a /tmp/ek/backend/. /opt/edgekit/backend/ && cp /tmp/ek/pyproject.toml /opt/edgekit/pyproject.toml && rm -rf /tmp/ek && pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null; systemctl restart edgekit-backend; sleep 5; systemctl is-active edgekit-backend || true'
