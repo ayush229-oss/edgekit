@@ -7,49 +7,44 @@ on:
 jobs:
   # ── 1. Deploy frontend to Vercel ──────────────────────────────────────────
   deploy-frontend:
-    name: Frontend → Vercel
+    name: Frontend -> Vercel
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: amondnet/vercel-action@v25
         with:
-          node-version: 20
-      - name: Install Vercel CLI
-        run: npm install -g vercel@latest
-      - name: Pull Vercel project settings
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: frontend
-        env:
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      - name: Build
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: frontend
-        env:
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      - name: Deploy to Vercel (production)
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
-        working-directory: frontend
-        env:
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-token:      ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id:     ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./frontend
+          vercel-args:       '--prod'
 
   # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
   deploy-backend:
-    name: Backend → VPS
+    name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
-      - name: Pull latest code and restart service
+      - name: Sync backend to VPS and restart
         uses: appleboy/ssh-action@v1.0.3
         with:
           host:     ${{ secrets.VPS_HOST }}
           username: root
           key:      ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /opt/edgekit
-            git pull origin main
-            pip install sentry-sdk[fastapi] pyarrow --quiet || true
+            set -e
+            # If not a git repo yet, initialise it
+            if [ ! -d /opt/edgekit/.git ]; then
+              cd /opt/edgekit
+              git init
+              git remote add origin https://github.com/ayush229-oss/edgekit.git
+              git fetch --depth=1 origin main
+              git checkout -f FETCH_HEAD
+            else
+              cd /opt/edgekit
+              git fetch --depth=1 origin main
+              git checkout -f FETCH_HEAD
+            fi
+            pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
             systemctl restart edgekit-backend
             sleep 3
             systemctl is-active edgekit-backend
