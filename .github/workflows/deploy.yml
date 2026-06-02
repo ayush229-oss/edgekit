@@ -6,9 +6,6 @@ on:
 
 jobs:
   # ── 1. Deploy frontend to Vercel ──────────────────────────────────────────
-  # Uses simple "vercel --prod --yes" (remote build on Vercel servers).
-  # project.json is committed so project linking is automatic.
-  # Env vars are set in the Vercel project settings dashboard.
   deploy-frontend:
     name: Frontend -> Vercel
     runs-on: ubuntu-latest
@@ -27,7 +24,6 @@ jobs:
         run: vercel --prod --yes --token "$VERCEL_TOKEN"
 
   # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
-  # SSH key auth confirmed working. Runs commands inline (no heredoc).
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
@@ -42,9 +38,12 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Test minimal SSH (no line continuation)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@$VPS_HOST 'echo SSH_MINIMAL_OK'
+
       - name: Pull latest code on VPS and restart service
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@"$VPS_HOST" \
-            'rm -rf /tmp/ek && git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/ek && cp -a /tmp/ek/backend/. /opt/edgekit/backend/ && cp /tmp/ek/pyproject.toml /opt/edgekit/pyproject.toml && rm -rf /tmp/ek && pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null; systemctl restart edgekit-backend; sleep 5; systemctl is-active edgekit-backend || true'
+        run: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@$VPS_HOST 'rm -rf /tmp/ek && git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/ek && cp -a /tmp/ek/backend/. /opt/edgekit/backend/ && cp /tmp/ek/pyproject.toml /opt/edgekit/pyproject.toml && rm -rf /tmp/ek && pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null; systemctl restart edgekit-backend; sleep 5; systemctl is-active edgekit-backend || true'
