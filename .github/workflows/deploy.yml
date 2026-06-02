@@ -20,32 +20,33 @@ jobs:
         env:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-        run: vercel --prod --yes --token "$VERCEL_TOKEN"
+        run: vercel --prod --yes --token ${{ secrets.VERCEL_TOKEN }}
 
   # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
       - name: Pull latest code on VPS and restart service
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host:     ${{ secrets.VPS_HOST }}
-          username: root
-          key:      ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -e
-            # Clone fresh copy to temp dir (repo is public, no auth needed)
-            rm -rf /tmp/edgekit_deploy
-            git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/edgekit_deploy
-            # Sync backend files in place (no disruption to other dirs)
-            cp -a /tmp/edgekit_deploy/backend/. /opt/edgekit/backend/
-            cp /tmp/edgekit_deploy/pyproject.toml /opt/edgekit/pyproject.toml
-            rm -rf /tmp/edgekit_deploy
-            # Install any new deps
-            pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
-            # Restart and verify
-            systemctl restart edgekit-backend
-            sleep 3
-            systemctl is-active edgekit-backend
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@"$VPS_HOST" << 'ENDSSH'
+          set -e
+          rm -rf /tmp/edgekit_deploy
+          git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/edgekit_deploy
+          cp -a /tmp/edgekit_deploy/backend/. /opt/edgekit/backend/
+          cp /tmp/edgekit_deploy/pyproject.toml /opt/edgekit/pyproject.toml
+          rm -rf /tmp/edgekit_deploy
+          pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
+          systemctl restart edgekit-backend
+          sleep 5
+          systemctl is-active edgekit-backend && echo "Service is active" || systemctl status edgekit-backend --no-pager | head -15
+          ENDSSH
