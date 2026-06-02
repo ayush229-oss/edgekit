@@ -20,29 +20,15 @@ jobs:
         env:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: |
-          vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-          vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-          vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+        run: vercel --prod --yes --token "$VERCEL_TOKEN"
 
   # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Copy backend files to VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host:     ${{ secrets.VPS_HOST }}
-          username: root
-          key:      ${{ secrets.VPS_SSH_KEY }}
-          source:   "backend,pyproject.toml"
-          target:   "/opt/edgekit"
-          overwrite: true
-
-      - name: Install deps and restart service
+      - name: Pull latest code on VPS and restart service
         uses: appleboy/ssh-action@v1.0.3
         with:
           host:     ${{ secrets.VPS_HOST }}
@@ -50,7 +36,16 @@ jobs:
           key:      ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
+            # Clone fresh copy to temp dir (repo is public, no auth needed)
+            rm -rf /tmp/edgekit_deploy
+            git clone --depth=1 https://github.com/ayush229-oss/edgekit.git /tmp/edgekit_deploy
+            # Sync backend files in place (no disruption to other dirs)
+            cp -a /tmp/edgekit_deploy/backend/. /opt/edgekit/backend/
+            cp /tmp/edgekit_deploy/pyproject.toml /opt/edgekit/pyproject.toml
+            rm -rf /tmp/edgekit_deploy
+            # Install any new deps
             pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
+            # Restart and verify
             systemctl restart edgekit-backend
             sleep 3
             systemctl is-active edgekit-backend
