@@ -24,6 +24,7 @@ from backend.engine.core import (
 )
 from backend.engine.core.metrics import compute_challenge_result
 from backend.api import store
+from backend.api.cache import backtest_cache
 from backend.api.schemas import BacktestResponse, BacktestMetrics, ChallengeParams, ChallengeResult, ChallengeDayResult
 from backend.db import get_db, BacktestRun
 
@@ -1179,6 +1180,22 @@ def run_v2_backtest(
     except ValueError as e:
         raise HTTPException(400, str(e))
 
+    # ── Cache check (skip for upload data — unique per session) ──────────────
+    _cache_key = None
+    if req.data_source != "upload":
+        _cache_key = {
+            "graph":      req.graph,
+            "symbol":     req.symbol,
+            "timeframe":  req.timeframe,
+            "n_bars":     req.n_bars,
+            "target_r":   req.target_r,
+            "close_pct":  req.target_close_pct,
+            "trail_mode": req.trail_mode,
+        }
+        cached = backtest_cache.get(_cache_key)
+        if cached is not None:
+            return cached
+
     # Soft-auth + quota (same pattern as /backtest)
     user = None
     try:
@@ -1269,7 +1286,7 @@ def run_v2_backtest(
                 daily          = [ChallengeDayResult(**d) for d in cr["daily"]],
             )
 
-    return BacktestResponse(
+    response = BacktestResponse(
         strategy_id  = "graph_v2:custom",
         data_range   = (df["time"].iloc[0].isoformat(), df["time"].iloc[-1].isoformat()),
         bars         = len(df),
@@ -1294,3 +1311,9 @@ def run_v2_backtest(
         data_source  = data_source_of(df),
         challenge    = challenge_result,
     )
+
+    # Store in cache (only for MT5/yfinance data, not user uploads)
+    if _cache_key is not None:
+        backtest_cache.set(_cache_key, response)
+
+    return response

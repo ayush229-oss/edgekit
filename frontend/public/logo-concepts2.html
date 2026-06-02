@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #EBEBEB; font-family: Inter, system-ui, sans-serif; padding: 48px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; max-width: 960px; }
+  .card { background: white; border-radius: 20px; padding: 36px 28px; text-align: center; }
+  .preview { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+  .on-dark { background: #0D1117; border-radius: 12px; padding: 16px 24px; display: inline-flex; align-items: center; gap: 12px; }
+  .on-light { display: inline-flex; align-items: center; gap: 12px; }
+  .label { font-size: 11px; font-weight: 700; color: #0B6E4F; margin-top: 24px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .desc { font-size: 12px; color: #888; margin-top: 6px; line-height: 1.6; }
+  .wm { font-family: Inter, system-ui, sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.6px; color: #0A0A0A; }
+  .wm-w { font-family: Inter, system-ui, sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.6px; color: white; }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <!-- A: Diamond lettermark -->
+  <div class="card">
+    <div class="preview">
+
+      <!-- Icon standalone -->
+      <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+        <!-- Diamond shape -->
+        <path d="M36 6 L66 36 L36 66 L6 36 Z" fill="#0B6E4F"/>
+        <!-- E cutout as white lines inside diamond -->
+        <line x1="26" y1="28" x2="46" y2="28" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+        <line x1="26" y1="36" x2="41" y2="36" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+        <line x1="26" y1="44" x2="46" y2="44" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+        <line x1="26" y1="28" x2="26" y2="44" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+      </svg>
+
+      <!-- Light lockup -->
+      <div class="on-light">
+        <svg width="40" height="40" viewBox="0 0 72 72" fill="none">
+          <path d="M36 6 L66 36 L36 66 L6 36 Z" fill="#0B6E4F"/>
+          <line x1="26" y1="28" x2="46" y2="28" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="26" y1="36" x2="41" y2="36" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="26" y1="44" x2="46" y2="44" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="26" y1="28" x2="26" y2="44" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+        </svg>
+        <span class="wm">edgekit</span>
+      </div>
+
+      <!-- Dark lockup -->
+      <div class="on-dark">
+        <svg width="32" height="32" viewBox="0 0 72 72" fill="none">
+          <path d="M36 6 L66 36 L36 66 L6 36 Z" fill="#0B6E4F"/>
+          <line x1="26" y1="28" x2="46" y2="28" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="26" y1="36" x2="41" y2="36" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="26" y1="44" x2="46" y2="44" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="26" y1="28" x2="26" y2="44" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+        </svg>
+        <span class="wm-w">edgekit</span>
+      </div>
+    </div>
+
+    <div class="label">A — Diamond E</div>
+    <div class="desc">A diamond (trading signal marker shape) with the letter E inside. Geometric, premium, not a chart.</div>
+  </div>
+
+  <!-- B: Pure bold wordmark with accent -->
+  <div class="card">
+    <div class="preview">
+
+      <!-- Icon: circle with EK -->
+      <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+        <circle cx="36" cy="36" r="36" fill="#0B6E4F"/>
+        <text x="36" y="46" text-anchor="middle"
+              font-family="Inter, system-ui, sans-serif"
+              font-size="26" font-weight="800" fill="white" letter-spacing="-1">EK</text>
+      </svg>
+
+      <!-- Bold wordmark: all-caps with green dot accent -->
+      <div style="display:flex;align-items:center;gap:0">
+        <span style="font-size:28px;font-weight:800;letter-spacing:2px;color:#0A0A0A;font-family:Inter,system-ui">EDGE</span>
+        <span style="font-size:28px;font-weight:800;letter-spacing:2px;color:#0B6E4F;font-family:Inter,system-ui">KIT</span>
+      </div>
+
+      <div class="on-dark">
+        <svg width="32" height="32" viewBox="0 0 72 72" fill="none">
+          <circle cx="36" cy="36" r="36" fill="#0B6E4F"/>
+          <text x="36" y="46" text-anchor="middle"
+                font-family="Inter, system-ui, sans-serif"
+                font-size="26" font-weight="800" fill="white" letter-spacing="-1">EK</text>
+        </svg>
+        <div style="display:flex;align-items:center;gap:0">
+          <span style="font-size:20px;font-weight:800;letter-spacing:2px;color:white;font-family:Inter,system-ui">EDGE</span>
+          <span style="font-size:20px;font-weight:800;letter-spacing:2px;color:#2ecc89;font-family:Inter,system-ui">KIT</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="label">B — EK Circle + Split wordmark</div>
+    <div class="desc">Circle monogram with bold split-color wordmark. EDGE in black, KIT in green. Clear brand hierarchy.</div>
+  </div>
+
+  <!-- C: Chevron / angle mark -->
+  <div class="card">
+    <div class="preview">
+
+      <!-- Icon: two bold chevron lines -->
+      <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+        <rect width="72" height="72" rx="16" fill="#0A0A0A"/>
+        <!-- Two offset upward chevrons — outer faint, inner solid green -->
+        <polyline points="14,50 36,22 58,50"
+                  stroke="#0B6E4F" stroke-opacity="0.3" stroke-width="5"
+                  fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="20,56 36,30 52,56"
+                  stroke="#0B6E4F" stroke-width="5"
+                  fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+
+      <!-- Light bg version -->
+      <div class="on-light">
+        <svg width="40" height="40" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="16" fill="#0A0A0A"/>
+          <polyline points="14,50 36,22 58,50"
+                    stroke="#0B6E4F" stroke-opacity="0.3" stroke-width="5"
+                    fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="20,56 36,30 52,56"
+                    stroke="#0B6E4F" stroke-width="5"
+                    fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="wm">edgekit</span>
+      </div>
+
+      <!-- Dark bg -->
+      <div class="on-dark">
+        <svg width="32" height="32" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="16" fill="#0B6E4F"/>
+          <polyline points="14,50 36,22 58,50"
+                    stroke="white" stroke-opacity="0.3" stroke-width="5"
+                    fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="20,56 36,30 52,56"
+                    stroke="white" stroke-width="5"
+                    fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="wm-w">edgekit</span>
+      </div>
+    </div>
+
+    <div class="label">C — Double Chevron</div>
+    <div class="desc">Two offset upward arrows — momentum, direction, "cutting edge." Dark icon feels premium/institutional.</div>
+  </div>
+
+</div>
+</body>
+</html>

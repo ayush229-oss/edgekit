@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1A1A1A; font-family: Inter, system-ui, sans-serif; padding: 48px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 800px; }
+  .card { background: #242424; border-radius: 20px; padding: 40px 32px; }
+  .row { display: flex; align-items: center; gap: 14px; }
+  .col { display: flex; flex-direction: column; gap: 20px; }
+  .onwhite { background: #F5F5F7; border-radius: 10px; padding: 14px 22px; display: inline-flex; align-items: center; gap: 12px; }
+  .label { font-size: 10px; font-weight: 700; color: #2ecc89; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 28px; }
+  .desc { font-size: 12px; color: #666; margin-top: 5px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <!-- A: Run / Backtest button -->
+  <div class="card">
+    <div class="col">
+      <!-- Icon -->
+      <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+        <circle cx="36" cy="36" r="36" fill="#0B6E4F"/>
+        <!-- Play triangle, offset right for visual balance -->
+        <path d="M29 24 L29 48 L52 36 Z" fill="white"/>
+      </svg>
+
+      <!-- Light -->
+      <div class="onwhite">
+        <svg width="38" height="38" viewBox="0 0 72 72" fill="none">
+          <circle cx="36" cy="36" r="36" fill="#0B6E4F"/>
+          <path d="M29 24 L29 48 L52 36 Z" fill="white"/>
+        </svg>
+        <span style="font-size:22px;font-weight:700;letter-spacing:-0.5px;color:#0A0A0A;font-family:Inter">edgekit</span>
+      </div>
+
+      <!-- Dark -->
+      <div class="row">
+        <svg width="38" height="38" viewBox="0 0 72 72" fill="none">
+          <circle cx="36" cy="36" r="36" fill="#0B6E4F"/>
+          <path d="M29 24 L29 48 L52 36 Z" fill="white"/>
+        </svg>
+        <span style="font-size:22px;font-weight:700;letter-spacing:-0.5px;color:white;font-family:Inter">edgekit</span>
+      </div>
+    </div>
+    <div class="label">A — Run</div>
+    <div class="desc">Backtest = press play. A circle play button. Instantly says "run your strategy." Clean, timeless.</div>
+  </div>
+
+  <!-- B: Thin outline lettermark "e" -->
+  <div class="card">
+    <div class="col">
+      <!-- Icon: thin outlined e inside square -->
+      <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+        <rect width="72" height="72" rx="16" fill="none" stroke="#0B6E4F" stroke-width="3"/>
+        <text x="36" y="52" text-anchor="middle"
+              font-family="Inter, system-ui, sans-serif"
+              font-size="46" font-weight="800" fill="#0B6E4F" letter-spacing="-2">e</text>
+      </svg>
+
+      <!-- Light bg: filled icon -->
+      <div class="onwhite">
+        <svg width="38" height="38" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="16" fill="#0B6E4F"/>
+          <text x="36" y="52" text-anchor="middle"
+                font-family="Inter, system-ui, sans-serif"
+                font-size="46" font-weight="800" fill="white" letter-spacing="-2">e</text>
+        </svg>
+        <span style="font-size:22px;font-weight:300;letter-spacing:3px;color:#0A0A0A;font-family:Inter;text-transform:uppercase">EDGEKIT</span>
+      </div>
+
+      <!-- Outline wordmark -->
+      <div class="row">
+        <svg width="38" height="38" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="16" fill="none" stroke="#0B6E4F" stroke-width="3"/>
+          <text x="36" y="52" text-anchor="middle"
+                font-family="Inter, system-ui, sans-serif"
+                font-size="46" font-weight="800" fill="#0B6E4F" letter-spacing="-2">e</text>
+        </svg>
+        <span style="font-size:22px;font-weight:300;letter-spacing:3px;color:white;font-family:Inter;text-transform:uppercase">EDGEKIT</span>
+      </div>
+    </div>
+    <div class="label">B — Bold "e" lettermark</div>
+    <div class="desc">Single oversized "e" — bold icon, light spaced wordmark. Contrast of weight. Minimal and confident.</div>
+  </div>
+
+  <!-- C: Wedge / split mark -->
+  <div class="card">
+    <div class="col">
+      <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+        <rect width="72" height="72" rx="16" fill="#083d2c"/>
+        <!-- Rising wedge: dark base, bright top -->
+        <path d="M10 62 L36 10 L62 62 Z" fill="none" stroke="#0B6E4F" stroke-width="3.5" stroke-linejoin="round"/>
+        <!-- Filled inner wedge highlight -->
+        <path d="M36 10 L62 62 L36 48 Z" fill="#0B6E4F" fill-opacity="0.9"/>
+        <!-- Dot at apex -->
+        <circle cx="36" cy="10" r="4" fill="#2ecc89"/>
+      </svg>
+
+      <div class="onwhite">
+        <svg width="38" height="38" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="16" fill="#083d2c"/>
+          <path d="M10 62 L36 10 L62 62 Z" fill="none" stroke="#0B6E4F" stroke-width="3.5" stroke-linejoin="round"/>
+          <path d="M36 10 L62 62 L36 48 Z" fill="#0B6E4F" fill-opacity="0.9"/>
+          <circle cx="36" cy="10" r="4" fill="#2ecc89"/>
+        </svg>
+        <span style="font-size:22px;font-weight:700;letter-spacing:-0.5px;color:#0A0A0A;font-family:Inter">edgekit</span>
+      </div>
+
+      <div class="row">
+        <svg width="38" height="38" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="16" fill="#083d2c"/>
+          <path d="M10 62 L36 10 L62 62 Z" fill="none" stroke="#0B6E4F" stroke-width="3.5" stroke-linejoin="round"/>
+          <path d="M36 10 L62 62 L36 48 Z" fill="#0B6E4F" fill-opacity="0.9"/>
+          <circle cx="36" cy="10" r="4" fill="#2ecc89"/>
+        </svg>
+        <span style="font-size:22px;font-weight:700;letter-spacing:-0.5px;color:white;font-family:Inter">edgekit</span>
+      </div>
+    </div>
+    <div class="label">C — Wedge / Apex</div>
+    <div class="desc">Triangle outline + half-fill + apex dot. Asymmetric, sharp. The "peak" of a profitable run.</div>
+  </div>
+
+  <!-- D: Pure typographic wordmark, no icon -->
+  <div class="card">
+    <div class="col">
+
+      <!-- Wordmark: edge in white, kit as a green underlined badge -->
+      <div style="display:inline-flex;align-items:baseline;gap:0;font-family:Inter">
+        <span style="font-size:42px;font-weight:900;color:white;letter-spacing:-2px">edge</span>
+        <span style="font-size:42px;font-weight:900;color:#0B6E4F;letter-spacing:-2px">kit</span>
+      </div>
+
+      <!-- Smaller with tagline -->
+      <div class="onwhite" style="flex-direction:column;align-items:flex-start;gap:2px">
+        <div style="display:inline-flex;align-items:baseline;gap:0;font-family:Inter">
+          <span style="font-size:26px;font-weight:900;color:#0A0A0A;letter-spacing:-1.5px">edge</span>
+          <span style="font-size:26px;font-weight:900;color:#0B6E4F;letter-spacing:-1.5px">kit</span>
+        </div>
+        <span style="font-size:10px;font-weight:500;color:#888;letter-spacing:1.5px;text-transform:uppercase">Strategy Builder</span>
+      </div>
+
+      <!-- Pill icon variant -->
+      <div class="row">
+        <div style="background:#0B6E4F;border-radius:10px;padding:8px 14px;display:inline-flex">
+          <span style="font-size:20px;font-weight:900;color:white;letter-spacing:-1px;font-family:Inter">ek</span>
+        </div>
+        <div style="display:inline-flex;align-items:baseline;gap:0;font-family:Inter">
+          <span style="font-size:22px;font-weight:900;color:white;letter-spacing:-1px">edge</span>
+          <span style="font-size:22px;font-weight:900;color:#0B6E4F;letter-spacing:-1px">kit</span>
+        </div>
+      </div>
+
+    </div>
+    <div class="label">D — Split wordmark</div>
+    <div class="desc">No icon. "edge" in black/white, "kit" in green. Two-tone wordmark with optional "ek" pill for small contexts.</div>
+  </div>
+
+</div>
+</body>
+</html>

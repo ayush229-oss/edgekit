@@ -2,7 +2,11 @@
 Tier-based rate / feature limits.
 """
 from __future__ import annotations
+import os
+import json
+import threading
 from datetime import datetime, timedelta
+from pathlib import Path
 from fastapi import HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -12,9 +16,11 @@ from backend.api.auth import current_user
 
 
 # ── Tier-level limits ───────────────────────────────────────────────────────
+# Node builder is the CORE feature — available to ALL tiers.
+# Differentiation is on depth: saved strategies, backtest history, AI calls.
 LIMITS = {
-    Tier.FREE:   {"daily_backtests": 3,    "saved_strategies": 1,   "csv_upload": False, "node_builder": False},
-    Tier.TRADER: {"daily_backtests": None, "saved_strategies": 10,  "csv_upload": True,  "node_builder": False},
+    Tier.FREE:   {"daily_backtests": 10,   "saved_strategies": 3,   "csv_upload": False, "node_builder": True},
+    Tier.TRADER: {"daily_backtests": None, "saved_strategies": 20,  "csv_upload": True,  "node_builder": True},
     Tier.PRO:    {"daily_backtests": None, "saved_strategies": 100, "csv_upload": True,  "node_builder": True},
 }
 
@@ -56,35 +62,55 @@ def require_csv_upload(user: User = Depends(current_user)) -> User:
 
 
 def require_node_builder(user: User = Depends(current_user)) -> User:
-    if not LIMITS[user.tier]["node_builder"]:
-        raise HTTPException(403,
-            "Visual node builder is a Pro feature.")
+    # Node builder is now open to all tiers — kept for backwards compat
     return user
 
 
-# ── Server-paid AI cost guard ────────────────────────────────────────────────
-# When a user hasn't brought their own key, Edgekit answers with Claude on the
-# server's bill. This is a lightweight in-process per-identity/day cap to prevent
-# runaway spend. It resets on restart (it's a guard, not a billing ledger); move
-# to a DB-backed counter if precise accounting is needed later.
-import os as _os
+# ── Server-paid AI cost guard ─────────────────────────────────────────────────
+# Persisted to disk so quotas survive service restarts.
+# File: EDGEKIT_DATA_DIR/ai_usage.json  (same dir as CSV store)
 
-_AI_USAGE: dict[tuple, int] = {}
-SERVER_AI_DAILY_CAP = int(_os.environ.get("SERVER_AI_DAILY_CAP", "40"))
+_AI_LOCK  = threading.Lock()
+_AI_FILE  = Path(os.environ.get("EDGEKIT_DATA_DIR",
+                                str(Path(__file__).parent.parent / "tmp"))) / "ai_usage.json"
+SERVER_AI_DAILY_CAP = int(os.environ.get("SERVER_AI_DAILY_CAP", "40"))
+
+
+def _load_ai_usage() -> dict:
+    try:
+        if _AI_FILE.exists():
+            return json.loads(_AI_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_ai_usage(data: dict) -> None:
+    try:
+        _AI_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _AI_FILE.write_text(json.dumps(data))
+    except Exception:
+        pass   # disk write failed — graceful degradation
 
 
 def enforce_ai_quota(identity: str, cap: int = SERVER_AI_DAILY_CAP) -> None:
-    """Raise 429 once `identity` has used `cap` server-paid AI calls today."""
+    """Raise 429 once `identity` has used `cap` server-paid AI calls today.
+    Usage is persisted to disk so it survives restarts."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    key = (identity or "anon", today)
-    used = _AI_USAGE.get(key, 0)
-    if used >= cap:
-        raise HTTPException(
-            429,
-            "You've hit today's limit on the free Claude assistant. Add your own "
-            "AI key under Resources → AI Model to keep going, or try again tomorrow.",
-        )
-    _AI_USAGE[key] = used + 1
-    if len(_AI_USAGE) > 5000:   # prune stale days
-        for k in [k for k in _AI_USAGE if k[1] != today]:
-            _AI_USAGE.pop(k, None)
+    key   = f"{identity or 'anon'}::{today}"
+
+    with _AI_LOCK:
+        usage = _load_ai_usage()
+
+        # Prune keys from previous days to keep file small
+        usage = {k: v for k, v in usage.items() if k.endswith(today)}
+
+        used = usage.get(key, 0)
+        if used >= cap:
+            raise HTTPException(
+                429,
+                "You've hit today's limit on the free AI assistant. Add your own "
+                "API key under Resources → AI Model to keep going, or try again tomorrow.",
+            )
+        usage[key] = used + 1
+        _save_ai_usage(usage)

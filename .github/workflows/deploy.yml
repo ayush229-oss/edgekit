@@ -1,0 +1,40 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # ── 1. Deploy frontend to Vercel ──────────────────────────────────────────
+  deploy-frontend:
+    name: Frontend → Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+      - name: Deploy to Vercel (production)
+        run: vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+        working-directory: frontend
+
+  # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
+  deploy-backend:
+    name: Backend → VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull latest code and restart service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: root
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /opt/edgekit
+            git pull origin main
+            pip install sentry-sdk[fastapi] pyarrow --quiet || true
+            systemctl restart edgekit-backend
+            sleep 3
+            systemctl is-active edgekit-backend

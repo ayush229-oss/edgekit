@@ -54,10 +54,27 @@ app = FastAPI(
     description="No-code strategy backtesting platform — backend.",
 )
 
-# CORS — open in dev, lock down in prod via env
+# ── Sentry error tracking ────────────────────────────────────────────────────
+import os as _os
+_SENTRY_DSN = _os.environ.get("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            traces_sample_rate=0.1,   # 10% of requests traced
+            profiles_sample_rate=0.1,
+        )
+    except ImportError:
+        pass   # sentry-sdk not installed — silently skip
+
+# ── CORS — locked to known origins (override via CORS_ORIGINS env var) ───────
+_DEFAULT_ORIGINS = "https://edgekit.uk,https://www.edgekit.uk,http://localhost:3000,http://127.0.0.1:3000"
+_CORS_ORIGINS = [o.strip() for o in _os.environ.get("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,7 +118,13 @@ async def _unhandled_exception(request: Request, exc: Exception):
 # ─── Health ──────────────────────────────────────────────────────────────────
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "strategies": len(REGISTRY), "store": store.stats()}
+    from backend.api.cache import backtest_cache
+    return {
+        "ok":         True,
+        "strategies": len(REGISTRY),
+        "store":      store.stats(),
+        "cache":      backtest_cache.stats(),
+    }
 
 
 # ─── Global stats (landing page counters) ─────────────────────────────────────
