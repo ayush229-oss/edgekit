@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="72" viewBox="0 0 240 72" fill="none">
+  <!-- Icon -->
+  <rect width="72" height="72" rx="16" fill="#083d2c"/>
+  <path d="M10 62 L36 10 L62 62 Z" fill="none" stroke="#0B6E4F" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M36 10 L62 62 L36 48 Z" fill="#0B6E4F" fill-opacity="0.9"/>
+  <circle cx="36" cy="10" r="4" fill="#2ecc89"/>
+  <!-- Wordmark -->
+  <text x="88" y="46"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+        font-size="26" font-weight="700" letter-spacing="-0.6"
+        fill="#0A0A0A">edgekit</text>
+</svg>

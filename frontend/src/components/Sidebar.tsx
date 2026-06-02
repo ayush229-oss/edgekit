@@ -86,9 +86,7 @@ export function Sidebar() {
         {collapsed ? (
           <>
             <Link href="/" title="Edgekit">
-              <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px] hover:bg-money transition-colors">
-                E
-              </div>
+              <img src="/edgekit-logo-icon.svg" alt="Edgekit" width={28} height={28} className="rounded-md" />
             </Link>
             <div className="flex items-center gap-0.5">
               <button onClick={() => router.back()}    title="Go back"    className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ArrowLeft  size={12} /></button>
@@ -98,10 +96,8 @@ export function Sidebar() {
         ) : (
           <>
             <Link href="/" className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px] shrink-0 hover:bg-money transition-colors">
-                E
-              </div>
-              <span className="font-semibold text-[14px] whitespace-nowrap">Edgekit</span>
+              <img src="/edgekit-logo-icon.svg" alt="Edgekit" width={28} height={28} className="rounded-md shrink-0" />
+              <span className="font-semibold text-[14px] whitespace-nowrap">edgekit</span>
             </Link>
             <div className="flex items-center gap-0.5">
               <button onClick={() => router.back()}    title="Go back"    className="p-1 rounded hover:bg-surface2 text-muted hover:text-ink transition-colors"><ArrowLeft  size={14} /></button>
