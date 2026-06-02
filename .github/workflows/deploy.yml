@@ -11,20 +11,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: amondnet/vercel-action@v25
-        with:
-          vercel-token:      ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id:     ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          working-directory: ./frontend
-          vercel-args:       '--prod'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Deploy to Vercel (production)
+        working-directory: ./frontend
+        env:
+          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+          vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+          vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
 
   # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
-      - name: Sync backend to VPS and restart
+      - uses: actions/checkout@v4
+
+      - name: Copy backend files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: root
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          source:   "backend,pyproject.toml"
+          target:   "/opt/edgekit"
+          overwrite: true
+
+      - name: Install deps and restart service
         uses: appleboy/ssh-action@v1.0.3
         with:
           host:     ${{ secrets.VPS_HOST }}
@@ -32,18 +50,6 @@ jobs:
           key:      ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
-            # If not a git repo yet, initialise it
-            if [ ! -d /opt/edgekit/.git ]; then
-              cd /opt/edgekit
-              git init
-              git remote add origin https://github.com/ayush229-oss/edgekit.git
-              git fetch --depth=1 origin main
-              git checkout -f FETCH_HEAD
-            else
-              cd /opt/edgekit
-              git fetch --depth=1 origin main
-              git checkout -f FETCH_HEAD
-            fi
             pip install sentry-sdk pyarrow --break-system-packages -q 2>/dev/null || true
             systemctl restart edgekit-backend
             sleep 3
