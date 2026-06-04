@@ -1264,6 +1264,21 @@ def run_v2_backtest(
     except Exception:
         db.rollback()
 
+    # Mirror into Supabase (single source of truth). Best-effort, never raises.
+    from backend.api import supa
+    supa.log_backtest_run(
+        user_id         = (user.clerk_id if user is not None else None),
+        strategy_id     = "graph_v2:" + (graph.get("name") or "custom"),
+        params_snapshot = {"graph": graph},
+        metrics         = {
+            "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
+            "total_r": m["total_r"],
+            "profit_factor": (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
+            "max_dd": m["max_dd"], "final_equity": m["final_equity"],
+        },
+        symbol = req.symbol, timeframe = req.timeframe, bars = len(df),
+    )
+
     # Optional prop firm challenge analysis
     challenge_result = None
     if req.challenge is not None:

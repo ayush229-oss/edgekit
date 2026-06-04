@@ -184,11 +184,23 @@ def healthz():
 # ─── Global stats (landing page counters) ─────────────────────────────────────
 @app.get("/stats/global")
 def global_stats(db: Session = Depends(get_db)):
-    """Total backtests run + total registered users. Cached by ISR on the frontend."""
+    """Total backtests run + total registered users. Cached by ISR on the frontend.
+
+    Reads from Supabase (single source of truth) when configured, falling back to
+    the local DB. Uses max() of both so the counter never visibly regresses during
+    the migration window."""
     from sqlalchemy import func
-    total_backtests = db.query(func.count(BacktestRun.id)).scalar() or 0
-    total_users     = db.query(func.count(User.id)).scalar() or 0
-    return {"total_backtests": int(total_backtests), "total_users": int(total_users)}
+    bt_local = db.query(func.count(BacktestRun.id)).scalar() or 0
+    us_local = db.query(func.count(User.id)).scalar() or 0
+    try:
+        from backend.api import supa
+        if supa.enabled():
+            bt = max(supa.count("backtest_runs"), int(bt_local))
+            us = max(supa.count("profiles"),      int(us_local))  # profiles = real users
+            return {"total_backtests": bt, "total_users": us}
+    except Exception:
+        pass
+    return {"total_backtests": int(bt_local), "total_users": int(us_local)}
 
 
 # ─── Strategies ──────────────────────────────────────────────────────────────
@@ -346,6 +358,23 @@ def run_backtest(
         db.add(run_row); db.commit()
     except Exception:
         db.rollback()    # don't fail the request just because logging broke
+
+    # Mirror into Supabase (single source of truth). Best-effort, never raises.
+    from backend.api import supa
+    supa.log_backtest_run(
+        user_id         = (user.clerk_id if user is not None else None),
+        strategy_id     = req.strategy_id,
+        params_snapshot = {**params, "tps": tps or params.get("tps") or []},
+        metrics         = {
+            "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
+            "total_r": m["total_r"],
+            "profit_factor": (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
+            "max_dd": m["max_dd"], "final_equity": m["final_equity"],
+        },
+        symbol    = req.symbol,
+        timeframe = req.timeframe,
+        bars      = len(df),
+    )
 
     return BacktestResponse(
         strategy_id  = req.strategy_id,
