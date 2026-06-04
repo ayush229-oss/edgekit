@@ -142,6 +142,10 @@ def bars(
 
 def _mt5():
     import MetaTrader5 as mt5
+    if mt5.initialize():
+        return mt5
+    # First init failed — shutdown any stale handle and retry once.
+    mt5.shutdown()
     if not mt5.initialize():
         raise HTTPException(502, f"MT5 not reachable: {mt5.last_error()}")
     return mt5

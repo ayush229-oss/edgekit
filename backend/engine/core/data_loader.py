@@ -217,12 +217,25 @@ def _load_mt5_terminal(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.Da
     if timeframe not in tf_map:
         raise ValueError(f"Unsupported timeframe: {timeframe}. Use one of {list(tf_map)}")
 
-    if not mt5.initialize():
-        raise RuntimeError("Cannot connect to MT5. Is the terminal open and logged in?")
+    # initialize() can return True on a stale connection; copy_rates_from_pos then
+    # returns None. Retry once with a full shutdown → reinit to recover silently.
+    rates = None
+    for attempt in range(2):
+        if not mt5.initialize():
+            mt5.shutdown()
+            if not mt5.initialize():
+                raise RuntimeError(
+                    f"Cannot connect to MT5 (attempt {attempt+1}): {mt5.last_error()}"
+                )
+        rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, n_bars)
+        if rates is not None and len(rates) > 0:
+            break
+        mt5.shutdown()   # force a clean reconnect before the retry
 
-    rates = mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, n_bars)
     if rates is None or len(rates) == 0:
-        raise RuntimeError(f"No bars returned for {symbol} {timeframe}")
+        raise RuntimeError(
+            f"No bars returned for {symbol} {timeframe} after reconnect: {mt5.last_error()}"
+        )
 
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
