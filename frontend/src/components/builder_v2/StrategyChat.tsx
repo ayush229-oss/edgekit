@@ -73,8 +73,18 @@ export function StrategyChat({
   const [hasKey,    setHasKey]    = useState(false);
   const [provider,  setProvider]  = useState("gemini");
   const [model,     setModel]     = useState("");
+  const [image,     setImage]     = useState<string | null>(null);  // data URL for this turn
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
+
+  // Read a dropped/pasted/selected image File into a base64 data URL.
+  function readImage(file: File | null | undefined) {
+    if (!file || !file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) { setErr("Reference image too large (max 5 MB)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => setImage(reader.result as string);
+    reader.readAsDataURL(file);
+  }
 
   function greeting(): ChatMessage {
     return {
@@ -139,11 +149,14 @@ export function StrategyChat({
 
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if ((!text && !image) || busy) return;
     setErr(null);
     setInput("");
+    const img = image;
+    setImage(null);
 
-    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    const display = text || "🖼 Chart attached";
+    const next: ChatMessage[] = [...messages, { role: "user", content: display }];
     setMessages(next);
     setBusy(true);
 
@@ -152,6 +165,7 @@ export function StrategyChat({
         messages: next, symbol, timeframe,
         current_graph:  editing ? currentGraph : null,
         result_summary: editing ? resultSummary : null,
+        image: img ?? undefined,
       });
       if (res.type === "graph") {
         setGraph(res.graph);
@@ -387,21 +401,53 @@ export function StrategyChat({
 
         {/* Input */}
         <div className="px-5 pb-4 shrink-0 border-t border-border pt-3">
+          {/* Attached reference image preview */}
+          {image && (
+            <div className="mb-2 flex items-center gap-2">
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image} alt="reference" className="h-14 w-auto rounded-lg border border-border object-cover" />
+                <button
+                  onClick={() => setImage(null)}
+                  title="Remove image"
+                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-ink text-white text-xs leading-none flex items-center justify-center shadow">
+                  ×
+                </button>
+              </div>
+              <span className="text-[11px] text-muted">Chart attached — the AI will read it.</span>
+            </div>
+          )}
           <div className="flex gap-2 items-end">
+            <label
+              title="Attach a chart screenshot"
+              className="shrink-0 h-[44px] w-[44px] flex items-center justify-center rounded-xl border border-border bg-paper hover:bg-surface2 cursor-pointer text-lg text-muted">
+              🖼
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                disabled={busy}
+                onChange={(e) => { readImage(e.target.files?.[0]); e.currentTarget.value = ""; }}
+              />
+            </label>
             <textarea
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKey}
+              onPaste={(e) => {
+                const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+                if (item) { const f = item.getAsFile(); if (f) { readImage(f); } }
+              }}
               rows={2}
-              placeholder="Type your answer… (Enter to send)"
+              placeholder="Type your answer… (Enter to send · paste or attach a chart 🖼)"
               disabled={busy}
               className="flex-1 rounded-xl bg-paper border border-border px-3 py-2.5 text-[13.5px] resize-none
                          focus:outline-none focus:ring-1 focus:ring-money disabled:opacity-50 leading-relaxed"
             />
             <button
               onClick={send}
-              disabled={!input.trim() || busy}
+              disabled={(!input.trim() && !image) || busy}
               className="px-4 py-2.5 rounded-xl bg-money text-white text-[13px] font-medium
                          hover:bg-moneyDark transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
@@ -409,7 +455,7 @@ export function StrategyChat({
             </button>
           </div>
           <p className="text-[10.5px] text-muted mt-1.5">
-            Shift+Enter for new line · Enter to send · The AI will ask questions until it understands your strategy
+            Shift+Enter for new line · Enter to send · attach or paste a chart screenshot as reference
           </p>
         </div>
       </div>

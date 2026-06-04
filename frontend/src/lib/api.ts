@@ -424,6 +424,7 @@ export async function v2Chat(body: {
   timeframe?: string;
   current_graph?:  V2Graph | null;
   result_summary?: string | null;
+  image?:    string;
 }): Promise<ChatResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const ai = getUserAIKey();

@@ -147,6 +147,11 @@ def get_forward_test(vps_id: int) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def get_forward_test_by_id(supa_id: int) -> Optional[dict]:
+    rows = select("forward_tests", {"id": f"eq.{supa_id}"})
+    return rows[0] if rows else None
+
+
 def get_forward_tests_by_vps_ids(vps_ids: list) -> list[dict]:
     if not vps_ids:
         return []

@@ -800,6 +800,9 @@ class ChatRequest(BaseModel):
     # the assistant can EDIT it rather than start from scratch.
     current_graph:  Optional[Dict[str, Any]] = None
     result_summary: Optional[str] = None
+    # Optional reference image (chart screenshot) for THIS turn, as a data URL.
+    # Used by vision-capable providers (Anthropic default, Gemini, OpenAI).
+    image:          Optional[str] = None
 
 _CHAT_SYSTEM = """You are Edgekit's friendly trading strategy assistant. Your job is to help non-technical traders design a backtestable strategy through conversation — without them needing to know code, Python, or indicators.
 
@@ -925,6 +928,19 @@ def graph_chat(
 
     model = (x_ai_model or "").strip() or None
 
+    # Reference image (this turn only). Vision providers see it; text-only ignore.
+    img = _parse_image(req.image)
+    if img is not None and provider in ("groq", "mistral"):
+        img = None
+    if img is not None and history:
+        for i in range(len(history) - 1, -1, -1):
+            if history[i]["role"] == "user":
+                history[i] = {**history[i], "content": history[i]["content"] +
+                              "\n\n[A reference chart image is attached — read it "
+                              "(levels, patterns, indicators) and use it to design "
+                              "the strategy.]"}
+                break
+
     def _build_from_raw(raw_text: str):
         """Classify a model reply.
 
@@ -951,15 +967,15 @@ def graph_chat(
             return ("message", result.get("content", ""))
         return ("message", "Tell me more about your strategy idea — what market condition should trigger a trade?")
 
-    def _ask(hist):
+    def _ask(hist, image=None):
         try:
-            return _call_chat(provider, api_key, system_prompt, hist, model=model)
+            return _call_chat(provider, api_key, system_prompt, hist, model=model, image=image)
         except HTTPException:
             raise
         except Exception as e:
             raise _normalize_api_error(provider, str(e))
 
-    raw = _ask(history)
+    raw = _ask(history, image=img)   # image only on the first turn
     kind, payload = _build_from_raw(raw)
 
     # Self-repair: a type mismatch / unwired port is a structural error the user
@@ -1089,24 +1105,25 @@ def _layout_graph(graph: Dict[str, Any]) -> None:
 
 
 def _call_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict],
-               model: Optional[str] = None) -> str:
+               model: Optional[str] = None, image: Optional[Tuple[str, str]] = None) -> str:
     """Call AI provider with a full conversation history.
 
     `model` is an optional user-selected override. When None, each provider
-    uses its built-in default.
+    uses its built-in default. `image` (media_type, base64) is attached to the
+    last user message for vision-capable providers.
     """
     if provider == "gemini":
-        return _call_gemini_chat(api_key, system_prompt, history, model=model)
+        return _call_gemini_chat(api_key, system_prompt, history, model=model, image=image)
     elif provider == "anthropic":
-        return _call_anthropic_chat(api_key, system_prompt, history, model=model)
+        return _call_anthropic_chat(api_key, system_prompt, history, model=model, image=image)
     elif provider in ("openai", "groq", "mistral"):
-        return _call_openai_compat_chat(provider, api_key, system_prompt, history, model=model)
+        return _call_openai_compat_chat(provider, api_key, system_prompt, history, model=model, image=image)
     else:
         raise HTTPException(400, f"Unknown provider '{provider}'.")
 
 
 def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict],
-                      model: Optional[str] = None) -> str:
+                      model: Optional[str] = None, image: Optional[Tuple[str, str]] = None) -> str:
     import time
     try:
         from google import genai
@@ -1119,6 +1136,14 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict],
     for m in history:
         role = "model" if m["role"] == "assistant" else "user"
         contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
+    # Attach the reference image to the last user turn.
+    if image is not None:
+        import base64 as _b64
+        media_type, data = image
+        for c in reversed(contents):
+            if c.role == "user":
+                c.parts.append(types.Part.from_bytes(data=_b64.b64decode(data), mime_type=media_type))
+                break
 
     # User-selected model is tried first; gemini-2.0-flash stays as a safety
     # fallback on overload. When no model is chosen, use the default pair.
@@ -1170,11 +1195,24 @@ def _call_gemini_chat(api_key: str, system_prompt: str, history: List[Dict],
 
 
 def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict],
-                         model: Optional[str] = None) -> str:
+                         model: Optional[str] = None, image: Optional[Tuple[str, str]] = None) -> str:
     try:
         import anthropic
     except ImportError:
         raise HTTPException(503, "anthropic SDK not installed.")
+    # Attach the reference image to the last user message (Anthropic accepts a
+    # content list of image + text blocks).
+    if image is not None and history:
+        history = list(history)
+        media_type, data = image
+        for i in range(len(history) - 1, -1, -1):
+            if history[i]["role"] == "user":
+                history[i] = {"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                                                 "media_type": media_type, "data": data}},
+                    {"type": "text", "text": history[i]["content"]},
+                ]}
+                break
     client = anthropic.Anthropic(api_key=api_key)
     # Prompt caching: the system prompt embeds the full (static) node catalog,
     # which is identical on every turn and across users. Marking it cacheable
@@ -1201,7 +1239,7 @@ def _call_anthropic_chat(api_key: str, system_prompt: str, history: List[Dict],
 
 
 def _call_openai_compat_chat(provider: str, api_key: str, system_prompt: str, history: List[Dict],
-                             model: Optional[str] = None) -> str:
+                             model: Optional[str] = None, image: Optional[Tuple[str, str]] = None) -> str:
     try:
         from openai import OpenAI
     except ImportError:
@@ -1210,7 +1248,17 @@ def _call_openai_compat_chat(provider: str, api_key: str, system_prompt: str, hi
     if provider in _OPENAI_COMPAT_BASE:
         kwargs["base_url"] = _OPENAI_COMPAT_BASE[provider]
     client = OpenAI(**kwargs)
-    messages = [{"role": "system", "content": system_prompt}] + history
+    messages = [{"role": "system", "content": system_prompt}] + list(history)
+    # Only OpenAI GPT-4o models are vision-capable here; Groq/Mistral are text-only.
+    if image is not None and provider == "openai":
+        media_type, data = image
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                messages[i] = {"role": "user", "content": [
+                    {"type": "text", "text": messages[i]["content"]},
+                    {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}},
+                ]}
+                break
     resp = client.chat.completions.create(
         model=model or _PROVIDER_MODEL[provider],
         temperature=0.4,
@@ -1338,25 +1386,7 @@ def run_v2_backtest(
     if m is None:
         raise HTTPException(422, "No resolved trades — loosen parameters or check graph wiring.")
 
-    # Persist the run — always, so global stats count every backtest
-    try:
-        db.add(BacktestRun(
-            user_id         = user.id if user is not None else None,
-            strategy_id     = "graph_v2:" + (graph.get("name") or "custom"),
-            params_snapshot = {"graph": graph},
-            metrics         = {
-                "trades": m["trades"], "wr": m["wr"], "ev": m["ev"],
-                "total_r": m["total_r"],
-                "profit_factor": (m["profit_factor"] if m["profit_factor"] != float("inf") else 99.0),
-                "max_dd": m["max_dd"], "final_equity": m["final_equity"],
-            },
-            symbol = req.symbol, timeframe = req.timeframe, bars = len(df),
-        ))
-        db.commit()
-    except Exception:
-        db.rollback()
-
-    # Mirror into Supabase (single source of truth). Best-effort, never raises.
+    # Log to Supabase — sole source of truth for backtest history.
     from backend.api import supa
     supa.log_backtest_run(
         user_id         = (user.clerk_id if user is not None else None),

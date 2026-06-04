@@ -30,10 +30,15 @@ def enforce_backtest_quota(user: User = Depends(current_user),
     cap = LIMITS[user.tier]["daily_backtests"]
     if cap is None:
         return user
-    cutoff = datetime.utcnow() - timedelta(days=1)
-    used   = db.query(func.count(BacktestRun.id))\
-               .filter(BacktestRun.user_id == user.id,
-                       BacktestRun.created_at >= cutoff).scalar() or 0
+    cutoff = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    try:
+        from backend.api import supa as _supa
+        used = _supa.count("backtest_runs", {
+            "user_id":    f"eq.{user.clerk_id}",
+            "created_at": f"gte.{cutoff}",
+        }) if (user.clerk_id and _supa.enabled()) else 0
+    except Exception:
+        used = 0
     if used >= cap:
         raise HTTPException(429,
             f"Daily backtest cap reached ({cap}/day on {user.tier.value}). "
