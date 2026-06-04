@@ -86,6 +86,22 @@ def count(table: str, params: Optional[dict] = None) -> int:
     return int(tail) if tail.isdigit() else 0
 
 
+def upsert(table: str, row: dict, *, on_conflict: str, return_row: bool = False) -> Optional[dict]:
+    """INSERT … ON CONFLICT DO UPDATE via PostgREST merge-duplicates."""
+    if not enabled():
+        return None
+    pref = f"resolution=merge-duplicates,return={'representation' if return_row else 'minimal'}"
+    r = httpx.post(f"{_URL}/rest/v1/{table}",
+                   headers=_headers({"Prefer": pref}),
+                   params={"on_conflict": on_conflict},
+                   json=_clean(row), timeout=_TIMEOUT)
+    r.raise_for_status()
+    if return_row:
+        data = r.json()
+        return data[0] if isinstance(data, list) and data else None
+    return None
+
+
 # ── Best-effort helpers used by the routes (never raise) ─────────────────────
 def log_backtest_run(*, user_id, strategy_id, params_snapshot, metrics,
                      symbol, timeframe, bars) -> None:
@@ -99,6 +115,60 @@ def log_backtest_run(*, user_id, strategy_id, params_snapshot, metrics,
             "symbol":          symbol or "",
             "timeframe":       timeframe or "",
             "bars":            bars or 0,
+        })
+    except Exception:
+        pass
+
+
+def upsert_forward_test(*, vps_id: int, user_id, name, symbol, timeframe,
+                        graph, mgmt, baseline, started_at, status, latest) -> None:
+    """Mirror a forward test into Supabase by vps_id. Swallows all errors."""
+    try:
+        upsert("forward_tests", {
+            "vps_id":     vps_id,
+            "user_id":    user_id,
+            "name":       name or "",
+            "symbol":     symbol or "XAUUSD",
+            "timeframe":  timeframe or "M15",
+            "graph":      graph or {},
+            "mgmt":       mgmt or {},
+            "baseline":   baseline or {},
+            "started_at": started_at,
+            "status":     status or "active",
+            "latest":     latest or {},
+        }, on_conflict="vps_id")
+    except Exception:
+        pass
+
+
+def log_live_trade(*, vps_id: int, ft_vps_id: int, ts, action, symbol, side,
+                   volume, requested_price, fill_price, slippage, spread,
+                   sl, tp, ticket, profit, comment) -> None:
+    """Mirror a live trade event into Supabase. Swallows all errors."""
+    try:
+        # Resolve the Supabase forward_tests.id from the VPS forward_test id.
+        rows = select("forward_tests", {"vps_id": f"eq.{ft_vps_id}", "select": "id"})
+        if not rows:
+            return  # forward test not mirrored yet; skip
+        supa_ft_id = rows[0]["id"]
+        insert("live_trades", {
+            "forward_test_id": supa_ft_id,
+            "vps_id":          vps_id,
+            "ft_vps_id":       ft_vps_id,
+            "ts":              ts,
+            "action":          action or "open",
+            "symbol":          symbol or "",
+            "side":            side or "",
+            "volume":          volume or 0.0,
+            "requested_price": requested_price or 0.0,
+            "fill_price":      fill_price or 0.0,
+            "slippage":        slippage or 0.0,
+            "spread":          spread or 0.0,
+            "sl":              sl or 0.0,
+            "tp":              tp or 0.0,
+            "ticket":          ticket or 0,
+            "profit":          profit or 0.0,
+            "comment":         comment or "",
         })
     except Exception:
         pass

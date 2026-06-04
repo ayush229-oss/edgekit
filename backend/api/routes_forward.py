@@ -141,6 +141,15 @@ def _refresh(ft: ForwardTest, db: Session) -> None:
             db.add(ft); db.commit()
         except Exception:
             db.rollback()
+        return
+    from backend.api import supa as _supa
+    _supa.upsert_forward_test(
+        vps_id=ft.id, user_id=None, name=ft.name,
+        symbol=ft.symbol, timeframe=ft.timeframe, graph=ft.graph,
+        mgmt=ft.mgmt, baseline=ft.baseline,
+        started_at=ft.started_at.isoformat() if ft.started_at else None,
+        status=ft.status, latest=ft.latest,
+    )
 
 
 # ─── Background scheduler ────────────────────────────────────────────────────
@@ -279,7 +288,16 @@ def forward_start(
     )
     db.add(ft); db.commit(); db.refresh(ft)
     if mode == "sim":
-        _refresh(ft, db)      # paper recompute once (live tests are driven by the executor)
+        _refresh(ft, db)      # paper recompute once (Supabase mirror happens inside _refresh)
+    else:
+        from backend.api import supa as _supa
+        _supa.upsert_forward_test(
+            vps_id=ft.id, user_id=None, name=ft.name,
+            symbol=ft.symbol, timeframe=ft.timeframe, graph=ft.graph,
+            mgmt=ft.mgmt, baseline=ft.baseline,
+            started_at=ft.started_at.isoformat() if ft.started_at else None,
+            status=ft.status, latest=ft.latest,
+        )
     return _summary(ft, db)
 
 
@@ -321,6 +339,14 @@ def forward_stop(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
         raise HTTPException(404, "Forward test not found.")
     ft.status = "stopped"
     db.add(ft); db.commit()
+    from backend.api import supa as _supa
+    _supa.upsert_forward_test(
+        vps_id=ft.id, user_id=None, name=ft.name,
+        symbol=ft.symbol, timeframe=ft.timeframe, graph=ft.graph,
+        mgmt=ft.mgmt, baseline=ft.baseline,
+        started_at=ft.started_at.isoformat() if ft.started_at else None,
+        status=ft.status, latest=ft.latest,
+    )
     return _summary(ft, db)
 
 
@@ -399,4 +425,14 @@ def live_event(ft_id: int, ev: LiveEvent,
         comment         = ev.comment[:64],
     )
     db.add(row); db.commit()
+    from backend.api import supa as _supa
+    _supa.log_live_trade(
+        vps_id=row.id, ft_vps_id=ft_id,
+        ts=row.ts.isoformat() if row.ts else None,
+        action=row.action, symbol=row.symbol, side=row.side,
+        volume=row.volume, requested_price=row.requested_price,
+        fill_price=row.fill_price, slippage=row.slippage,
+        spread=row.spread, sl=row.sl, tp=row.tp,
+        ticket=row.ticket, profit=row.profit, comment=row.comment,
+    )
     return {"ok": True, "id": row.id}
