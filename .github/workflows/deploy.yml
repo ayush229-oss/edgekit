@@ -4,54 +4,22 @@ on:
   push:
     branches: [main]
 
+# ── Note on frontend deployment ──────────────────────────────────────────────
+# The Vercel "edgekit" project (edgekit.uk) is connected to this GitHub repo
+# via Vercel's GitHub integration. It auto-deploys on every push to main.
+# No CI step needed for frontend.
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
-  # ── 1. Deploy frontend to Vercel ──────────────────────────────────────────
-  deploy-frontend:
-    name: Frontend -> Vercel
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
-
-      - name: Pull project settings & env vars
-        working-directory: ./frontend
-        env:
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-        run: vercel pull --yes --environment=production --token "$VERCEL_TOKEN"
-
-      - name: Build
-        working-directory: ./frontend
-        env:
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-        run: vercel build --prod --token "$VERCEL_TOKEN"
-
-      - name: Deploy to Vercel (production)
-        working-directory: ./frontend
-        env:
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-        run: vercel deploy --prebuilt --prod --token "$VERCEL_TOKEN"
-
-  # ── 2. Deploy backend to VPS via HTTP webhook ────────────────────────────
+  # ── Deploy backend to VPS via HTTP webhook ────────────────────────────────
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
       - name: Trigger VPS deploy webhook
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          response=$(curl -fsS --max-time 15 -X POST "http://${{ secrets.VPS_HOST }}:8765/internal/deploy")
+          echo "Triggering deploy on $VPS_HOST..."
+          response=$(curl -fsS --max-time 20 -X POST "http://${VPS_HOST}:8765/internal/deploy")
           echo "Response: $response"
