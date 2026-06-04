@@ -400,6 +400,10 @@ class FromTextRequest(BaseModel):
     description: str
     symbol:      str = "XAUUSD"
     timeframe:   str = "M15"
+    # Optional reference image (chart screenshot / hand-drawn setup) as a data URL
+    # — "data:image/png;base64,…". Used only by vision-capable providers
+    # (Anthropic, Gemini, OpenAI); ignored by text-only ones (Groq, Mistral).
+    image:       Optional[str] = None
 
 
 _AI_SYSTEM_TEMPLATE = """You are Edgekit's strategy-graph generator. The user describes a trading strategy in plain English; you respond with a JSON V2Graph that the visual builder can load directly.
@@ -513,7 +517,31 @@ def _build_catalog_and_prompts(req: "FromTextRequest") -> tuple:
     return system_prompt, user_prompt
 
 
-def _call_gemini(api_key: str, system_prompt: str, user_prompt: str) -> str:
+def _parse_image(image: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Parse a data-URL (or raw base64) reference image into (media_type, base64).
+
+    Returns None when no image is supplied. Raises 413 if it's too large.
+    """
+    if not image:
+        return None
+    s = image.strip()
+    media_type, data = "image/png", s
+    if s.startswith("data:"):
+        try:
+            header, data = s.split(",", 1)
+            media_type = header[5:].split(";")[0] or "image/png"
+        except ValueError:
+            return None
+    # base64 length ≈ 4/3 of byte size; ~7 MB base64 ≈ 5 MB image.
+    if len(data) > 7_000_000:
+        raise HTTPException(413, "Reference image is too large (max ~5 MB).")
+    if media_type not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+        media_type = "image/png"
+    return (media_type, data)
+
+
+def _call_gemini(api_key: str, system_prompt: str, user_prompt: str,
+                 image: Optional[Tuple[str, str]] = None) -> str:
     try:
         from google import genai
         from google.genai import types
@@ -547,9 +575,18 @@ def _call_gemini(api_key: str, system_prompt: str, user_prompt: str) -> str:
     except Exception as e:
         raise HTTPException(400, f"Could not init Gemini client: {e}")
 
+    if image is not None:
+        import base64 as _b64
+        media_type, data = image
+        contents: Any = [
+            types.Part.from_bytes(data=_b64.b64decode(data), mime_type=media_type),
+            user_prompt,
+        ]
+    else:
+        contents = user_prompt
     resp = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=user_prompt,
+        contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             response_mime_type="application/json",
@@ -560,11 +597,21 @@ def _call_gemini(api_key: str, system_prompt: str, user_prompt: str) -> str:
     return resp.text or ""
 
 
-def _call_anthropic(api_key: str, system_prompt: str, user_prompt: str) -> str:
+def _call_anthropic(api_key: str, system_prompt: str, user_prompt: str,
+                    image: Optional[Tuple[str, str]] = None) -> str:
     try:
         import anthropic
     except ImportError:
         raise HTTPException(503, "anthropic SDK not installed. Run: pip install anthropic")
+
+    if image is not None:
+        media_type, data = image
+        content: Any = [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
+            {"type": "text", "text": user_prompt},
+        ]
+    else:
+        content = user_prompt
 
     client = anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
@@ -572,12 +619,13 @@ def _call_anthropic(api_key: str, system_prompt: str, user_prompt: str) -> str:
         max_tokens=4096,
         temperature=0.3,
         system=system_prompt + "\n\nIMPORTANT: Output ONLY raw JSON — no prose, no markdown fences.",
-        messages=[{"role": "user", "content": user_prompt}],
+        messages=[{"role": "user", "content": content}],
     )
     return msg.content[0].text if msg.content else ""
 
 
-def _call_openai_compat(provider: str, api_key: str, system_prompt: str, user_prompt: str) -> str:
+def _call_openai_compat(provider: str, api_key: str, system_prompt: str, user_prompt: str,
+                        image: Optional[Tuple[str, str]] = None) -> str:
     try:
         from openai import OpenAI
     except ImportError:
@@ -587,6 +635,16 @@ def _call_openai_compat(provider: str, api_key: str, system_prompt: str, user_pr
     if provider in _OPENAI_COMPAT_BASE:
         kwargs["base_url"] = _OPENAI_COMPAT_BASE[provider]
 
+    # Only OpenAI's GPT-4o models are vision-capable here; Groq/Mistral are text-only.
+    if image is not None and provider == "openai":
+        media_type, data = image
+        user_content: Any = [
+            {"type": "text", "text": user_prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}},
+        ]
+    else:
+        user_content = user_prompt
+
     client = OpenAI(**kwargs)
     resp = client.chat.completions.create(
         model=_PROVIDER_MODEL[provider],
@@ -594,7 +652,7 @@ def _call_openai_compat(provider: str, api_key: str, system_prompt: str, user_pr
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt + "\n\nOutput ONLY raw JSON."},
-            {"role": "user",   "content": user_prompt},
+            {"role": "user",   "content": user_content},
         ],
     )
     return resp.choices[0].message.content or ""
@@ -644,15 +702,27 @@ def _from_text_impl(
 
     system_prompt, user_prompt = _build_catalog_and_prompts(req)
 
+    img = _parse_image(req.image)
+    if img is not None:
+        if provider in ("groq", "mistral"):
+            img = None   # text-only models — silently ignore the reference image
+        else:
+            user_prompt += (
+                "\n\nA reference image is attached (e.g. a chart screenshot or a "
+                "hand-drawn setup). Read it carefully — annotations, levels, "
+                "patterns, indicators shown — and incorporate what it depicts into "
+                "the strategy graph."
+            )
+
     def _call(extra: str = "") -> str:
         prompt = user_prompt + extra
         try:
             if provider == "gemini":
-                return _call_gemini(api_key, system_prompt, prompt)
+                return _call_gemini(api_key, system_prompt, prompt, img)
             elif provider == "anthropic":
-                return _call_anthropic(api_key, system_prompt, prompt)
+                return _call_anthropic(api_key, system_prompt, prompt, img)
             elif provider in ("openai", "groq", "mistral"):
-                return _call_openai_compat(provider, api_key, system_prompt, prompt)
+                return _call_openai_compat(provider, api_key, system_prompt, prompt, img)
             else:
                 raise HTTPException(400, f"Unknown provider '{provider}'. Use: gemini, anthropic, openai, groq, mistral.")
         except HTTPException:

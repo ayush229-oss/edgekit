@@ -172,6 +172,7 @@ export function StrategyDescriber({
   timeframe?:  string;
 }) {
   const [text, setText]       = useState("");
+  const [image, setImage]     = useState<string | null>(null);   // data URL of a reference image
   const [match, setMatch]     = useState<TemplateMatch | null>(null);
   const [busy, setBusy]       = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -184,6 +185,15 @@ export function StrategyDescriber({
   }, [open]);
 
   if (!open) return null;
+
+  // Read a dropped/pasted/selected image File into a base64 data URL.
+  function readImage(file: File | null | undefined) {
+    if (!file || !file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) { setAiError("Reference image too large (max 5 MB)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => setImage(reader.result as string);
+    reader.readAsDataURL(file);
+  }
 
   function fallbackKeywordMatch(): TemplateMatch | null {
     const lc = text.toLowerCase();
@@ -200,10 +210,10 @@ export function StrategyDescriber({
   // Fallback: keyword match against the starter templates (so the feature still
   // works locally if ANTHROPIC_API_KEY isn't configured on the server).
   async function describe() {
-    if (!text.trim()) return;
+    if (!text.trim() && !image) return;
     setBusy(true); setAiError(null); setMatch(null); setUsedAI(false); setNoMatch(false);
     try {
-      const g = await v2FromText({ description: text, symbol, timeframe });
+      const g = await v2FromText({ description: text, symbol, timeframe, image: image ?? undefined });
       onLoadGraph(g, g.name || "AI strategy");
       setUsedAI(true);
       onClose();
@@ -239,8 +249,8 @@ export function StrategyDescriber({
           <div>
             <h2 className="text-xl font-semibold">✨ Describe your strategy</h2>
             <p className="text-xs text-muted mt-1">
-              Write your idea in plain English. AI builds a custom node graph for you —
-              then you fine-tune the params on the canvas.
+              Write your idea in plain English — and optionally attach a chart screenshot
+              as reference. AI builds a custom node graph for you, then you fine-tune on the canvas.
             </p>
           </div>
           <button onClick={onClose} className="text-muted hover:text-ink text-xl leading-none">×</button>
@@ -266,16 +276,49 @@ export function StrategyDescriber({
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+            if (item) { const f = item.getAsFile(); if (f) { readImage(f); } }
+          }}
           placeholder={`e.g. "Buy when RSI crosses up through 30 in a strong trend, exit at 2R or trail behind structure."
 
 Or: "Donchian channel breakout on 20-day high, ATR-based stops."
 
-Or: "EMA 50 crosses above EMA 200 — golden cross."`}
+Tip: attach a chart screenshot (or paste one) as a reference — the AI will read it.`}
           className="w-full h-32 mt-3 rounded-md bg-cream border border-border px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-sage"
         />
 
+        {/* Reference image: attach a chart screenshot / hand-drawn setup. */}
+        <div className="mt-2 flex items-center gap-3">
+          {image ? (
+            <div className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={image} alt="reference" className="h-16 w-auto rounded-md border border-border object-cover" />
+              <button
+                onClick={() => setImage(null)}
+                title="Remove image"
+                className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-ink text-cream2 text-xs leading-none flex items-center justify-center shadow">
+                ×
+              </button>
+            </div>
+          ) : (
+            <label className="text-xs px-3 py-1.5 rounded-md border border-border bg-cream hover:bg-cream2 cursor-pointer text-muted">
+              🖼 Attach chart image
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => { readImage(e.target.files?.[0]); e.currentTarget.value = ""; }}
+              />
+            </label>
+          )}
+          <span className="text-[11px] text-muted">
+            {image ? "Reference attached — the AI will read it." : "Optional — paste or upload a screenshot (max 5 MB)."}
+          </span>
+        </div>
+
         <div className="flex justify-end gap-2 mt-3">
-          <button onClick={describe} disabled={!text.trim() || busy}
+          <button onClick={describe} disabled={(!text.trim() && !image) || busy}
             className="text-sm px-4 py-1.5 rounded-md bg-sage text-cream2 font-medium hover:bg-sageMid disabled:opacity-50">
             {busy ? "Generating with AI…" : "✨ Build my graph"}
           </button>

@@ -388,7 +388,7 @@ async function readApiError(r: Response): Promise<string> {
   }
 }
 
-export async function v2FromText(body: { description: string; symbol?: string; timeframe?: string }): Promise<V2Graph> {
+export async function v2FromText(body: { description: string; symbol?: string; timeframe?: string; image?: string }): Promise<V2Graph> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const ai = getUserAIKey();
   if (ai) {
