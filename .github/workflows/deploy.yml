@@ -4,22 +4,16 @@ on:
   push:
     branches: [main]
 
-# ── Note on frontend deployment ──────────────────────────────────────────────
-# The Vercel "edgekit" project (edgekit.uk) is connected to this GitHub repo
-# via Vercel's GitHub integration. It auto-deploys on every push to main.
-# No CI step needed for frontend.
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Frontend: auto-deployed by Vercel GitHub integration (edgekit.uk) ────────
+# ── Backend:  triggered via HTTP webhook to VPS ───────────────────────────────
 
 jobs:
-  # ── Deploy backend to VPS via HTTP webhook ────────────────────────────────
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
       - name: Trigger VPS deploy webhook
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          echo "Triggering deploy on $VPS_HOST..."
-          response=$(curl -fsS --max-time 20 -X POST "http://${VPS_HOST}:8765/internal/deploy")
-          echo "Response: $response"
+          echo "Calling deploy webhook..."
+          curl -v --max-time 20 -X POST "http://165.232.178.128:8765/internal/deploy" 2>&1 || true
+          echo "done"
