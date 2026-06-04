@@ -45,7 +45,7 @@ from backend.api.routes_user import router as user_router
 from backend.api.preview import router as preview_router
 from backend.api.routes_graph_v2 import router as graph_v2_router
 from backend.api.routes_forward  import router as forward_router, start_forward_scheduler
-from backend.db import get_db, init_db, BacktestRun, User
+from backend.db import get_db, init_db, User
 
 app = FastAPI(
     title="Edgekit API",
@@ -184,23 +184,19 @@ def healthz():
 # ─── Global stats (landing page counters) ─────────────────────────────────────
 @app.get("/stats/global")
 def global_stats(db: Session = Depends(get_db)):
-    """Total backtests run + total registered users. Cached by ISR on the frontend.
-
-    Reads from Supabase (single source of truth) when configured, falling back to
-    the local DB. Uses max() of both so the counter never visibly regresses during
-    the migration window."""
+    """Total backtests run + total registered users. Cached by ISR on the frontend."""
     from sqlalchemy import func
-    bt_local = db.query(func.count(BacktestRun.id)).scalar() or 0
     us_local = db.query(func.count(User.id)).scalar() or 0
     try:
         from backend.api import supa
         if supa.enabled():
-            bt = max(supa.count("backtest_runs"), int(bt_local))
-            us = max(supa.count("profiles"),      int(us_local))  # profiles = real users
-            return {"total_backtests": bt, "total_users": us}
+            return {
+                "total_backtests": supa.count("backtest_runs"),
+                "total_users":     max(supa.count("profiles"), int(us_local)),
+            }
     except Exception:
         pass
-    return {"total_backtests": int(bt_local), "total_users": int(us_local)}
+    return {"total_backtests": 0, "total_users": int(us_local)}
 
 
 # ─── Strategies ──────────────────────────────────────────────────────────────

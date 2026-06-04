@@ -11,7 +11,7 @@ from fastapi import HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from backend.db import get_db, User, BacktestRun, SavedStrategy, Tier
+from backend.db import get_db, User, SavedStrategy, Tier
 from backend.api.auth import current_user
 
 

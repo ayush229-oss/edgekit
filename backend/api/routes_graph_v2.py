@@ -26,7 +26,7 @@ from backend.engine.core.metrics import compute_challenge_result
 from backend.api import store
 from backend.api.cache import backtest_cache
 from backend.api.schemas import BacktestResponse, BacktestMetrics, ChallengeParams, ChallengeResult, ChallengeDayResult
-from backend.db import get_db, BacktestRun
+from backend.db import get_db
 
 
 router = APIRouter(prefix="/graph/v2", tags=["graph_v2"])

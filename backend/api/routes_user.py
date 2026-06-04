@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from backend.db import (
-    get_db, User, SavedStrategy, BacktestRun, WaitlistEntry, Tier,
+    get_db, User, SavedStrategy, WaitlistEntry, Tier,
 )
 from backend.api.auth   import current_user
 from backend.api.limits import enforce_saved_strategy_cap, LIMITS
@@ -92,14 +92,25 @@ def delete_saved(sid: int,
 def list_runs(limit: int = 50,
               db:   Session = Depends(get_db),
               user: User    = Depends(current_user)):
-    rows = (db.query(BacktestRun)
-              .filter(BacktestRun.user_id == user.id)
-              .order_by(BacktestRun.created_at.desc())
-              .limit(limit).all())
+    from backend.api import supa as _supa
+    if not (user.clerk_id and _supa.enabled()):
+        return []
+    try:
+        rows = _supa.select("backtest_runs", {
+            "user_id": f"eq.{user.clerk_id}",
+            "order":   "created_at.desc",
+            "limit":   str(limit),
+        })
+    except Exception:
+        return []
     return [{
-        "id": r.id, "strategy_id": r.strategy_id,
-        "symbol": r.symbol, "timeframe": r.timeframe, "bars": r.bars,
-        "metrics": r.metrics, "created_at": r.created_at.isoformat(),
+        "id":          r["id"],
+        "strategy_id": r["strategy_id"],
+        "symbol":      r.get("symbol", ""),
+        "timeframe":   r.get("timeframe", ""),
+        "bars":        r.get("bars", 0),
+        "metrics":     r.get("metrics", {}),
+        "created_at":  r.get("created_at", ""),
     } for r in rows]
 
 
