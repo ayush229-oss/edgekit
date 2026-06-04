@@ -15,6 +15,14 @@ jobs:
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
 
+      - name: Debug Vercel deploy
+        working-directory: ./frontend
+        env:
+          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+        run: vercel --prod --yes --debug --token "$VERCEL_TOKEN" 2>&1 | head -50 || true
+
       - name: Deploy to Vercel (production)
         working-directory: ./frontend
         env:
@@ -23,29 +31,13 @@ jobs:
           VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
         run: vercel --prod --yes --token "$VERCEL_TOKEN"
 
-  # ── 2. Deploy backend to VPS ─────────────────────────────────────────────
+  # ── 2. Deploy backend to VPS via HTTP webhook ────────────────────────────
   deploy-backend:
     name: Backend -> VPS
     runs-on: ubuntu-latest
     steps:
-      - name: Setup SSH key
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST:        ${{ secrets.VPS_HOST }}
+      - name: Trigger VPS deploy webhook
         run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-          # Diagnostics
-          echo "Key file size: $(wc -c < ~/.ssh/deploy_key) bytes"
-          head -1 ~/.ssh/deploy_key | grep -q "BEGIN" && echo "KEY TYPE: PRIVATE" || echo "KEY TYPE: NOT PRIVATE (possibly public key?)"
-          echo "VPS_HOST: $VPS_HOST"
-
-      - name: Test minimal SSH
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          echo "VPS_HOST is: $VPS_HOST"
-          echo "Key exists: $(ls -la ~/.ssh/deploy_key 2>/dev/null || echo MISSING)"
-          ssh -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes root@$VPS_HOST 'echo SSH_OK' 2>&1; echo "SSH exit: $?"
+          echo "Triggering deploy..."
+          response=$(curl -fsS --max-time 15 -X POST "http://${{ secrets.VPS_HOST }}:8765/internal/deploy")
+          echo "Response: $response"

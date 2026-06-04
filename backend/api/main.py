@@ -68,6 +68,27 @@ if _SENTRY_DSN:
     except ImportError:
         pass   # sentry-sdk not installed — silently skip
 
+# ── VPS deploy webhook (CI calls this instead of SSH) ────────────────────────
+# Triggered by GitHub Actions on push to main. Pulls latest code and restarts.
+# No secret needed — deploy only does `git clone` from a public repo.
+_DEPLOY_SCRIPT = "/opt/edgekit/scripts/vps_deploy.sh"
+
+@app.post("/internal/deploy", include_in_schema=False)
+async def trigger_deploy():
+    import subprocess
+    try:
+        # Use systemd-run to launch in its own transient cgroup so it survives
+        # the `systemctl restart edgekit-backend` that the script runs.
+        proc = subprocess.Popen(
+            ["systemd-run", "--no-block", "--description=edgekit-deploy",
+             "/bin/bash", _DEPLOY_SCRIPT],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {"ok": True, "pid": proc.pid, "message": "deploy started via systemd-run"}
+    except Exception as e:
+        raise HTTPException(500, f"Deploy failed to start: {e}")
+
 # ── CORS — locked to known origins (override via CORS_ORIGINS env var) ───────
 _DEFAULT_ORIGINS = "https://edgekit.uk,https://www.edgekit.uk,http://localhost:3000,http://127.0.0.1:3000"
 _CORS_ORIGINS = [o.strip() for o in _os.environ.get("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if o.strip()]
