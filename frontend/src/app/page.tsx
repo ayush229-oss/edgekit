@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listStrategies, getGlobalStats, API_URL } from "@/lib/api";
+import { listStrategies, getGlobalStats, API_URL, efetch } from "@/lib/api";
 import { TradeClipPair } from "@/components/TradeClip";
 
 export const revalidate = 300;
@@ -63,7 +63,7 @@ export default async function LandingPage() {
   const featured = strategies.slice(0, 3);
   const previewResults = await Promise.allSettled(
     featured.map((s) =>
-      fetch(`${API_URL}/strategies/${s.id}/preview-trades`, { next: { revalidate: 3600 } })
+      efetch(`${API_URL}/strategies/${s.id}/preview-trades`, { next: { revalidate: 3600 } } as any)
         .then((r) => (r.ok ? r.json() : null)).catch(() => null)
     )
   );

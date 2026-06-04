@@ -171,18 +171,13 @@ async def _unhandled_exception(request: Request, exc: Exception):
 
 # ─── Health ──────────────────────────────────────────────────────────────────
 @app.get("/healthz")
-def healthz(request: Request):
+def healthz():
     from backend.api.cache import backtest_cache
-    # TEMP diagnostic: confirm whether the Vercel proxy injects the API key.
-    _seen = request.headers.get("x-api-key")
     return {
-        "ok":           True,
-        "strategies":   len(REGISTRY),
-        "store":        store.stats(),
-        "cache":        backtest_cache.stats(),
-        "api_key_seen": bool(_seen),
-        "api_key_len":  len(_seen or ""),
-        "enforcing":    bool(_API_KEY),
+        "ok":         True,
+        "strategies": len(REGISTRY),
+        "store":      store.stats(),
+        "cache":      backtest_cache.stats(),
     }
 
 
