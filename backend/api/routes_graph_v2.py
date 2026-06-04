@@ -540,6 +540,28 @@ def _parse_image(image: Optional[str]) -> Optional[Tuple[str, str]]:
     return (media_type, data)
 
 
+def _coerce_json_text(s: str) -> str:
+    """Pull the JSON object out of an LLM reply.
+
+    Models often wrap JSON in ```json … ``` fences (or add a line of prose)
+    despite being told not to — that makes json.loads() fail on char 0. Strip
+    fences, then fall back to slicing between the outermost braces.
+    """
+    s = (s or "").strip()
+    if s.startswith("```"):
+        nl = s.find("\n")
+        s = s[nl + 1:] if nl != -1 else s[3:]
+        end = s.rfind("```")
+        if end != -1:
+            s = s[:end]
+        s = s.strip()
+    if not s.startswith("{"):
+        i, j = s.find("{"), s.rfind("}")
+        if i != -1 and j != -1 and j > i:
+            s = s[i:j + 1]
+    return s.strip()
+
+
 def _call_gemini(api_key: str, system_prompt: str, user_prompt: str,
                  image: Optional[Tuple[str, str]] = None) -> str:
     try:
@@ -736,12 +758,12 @@ def _from_text_impl(
         raise
 
     try:
-        graph = _json.loads(raw)
+        graph = _json.loads(_coerce_json_text(raw))
         validate_graph(graph)
     except Exception as e:
         try:
             raw2  = _call(f"\n\nYour previous attempt failed graph validation: {e}\nRebuild the graph correctly.")
-            graph = _json.loads(raw2)
+            graph = _json.loads(_coerce_json_text(raw2))
             validate_graph(graph)
         except Exception as e2:
             raise HTTPException(422, f"AI produced an invalid graph: {e2}")
