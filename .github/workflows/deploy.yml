@@ -4,8 +4,12 @@ on:
   push:
     branches: [main]
 
-# ── Frontend: auto-deployed by Vercel GitHub integration (edgekit.uk) ────────
-# ── Backend:  triggered via HTTP webhook to VPS ───────────────────────────────
+# ── Frontend ──────────────────────────────────────────────────────────────────
+# Vercel's GitHub integration auto-deploys the "edgekit" project on every push.
+# rootDirectory = frontend, domain = edgekit.uk. No CI step needed.
+#
+# ── Backend ───────────────────────────────────────────────────────────────────
+# HTTP webhook triggers git clone → file sync → systemctl restart on VPS.
 
 jobs:
   deploy-backend:
@@ -14,6 +18,5 @@ jobs:
     steps:
       - name: Trigger VPS deploy webhook
         run: |
-          echo "Calling deploy webhook..."
-          curl -v --max-time 20 -X POST "http://165.232.178.128:8765/internal/deploy" 2>&1 || true
-          echo "done"
+          response=$(curl -fsS --max-time 30 -X POST "http://165.232.178.128:8765/internal/deploy")
+          echo "Deploy triggered: $response"
