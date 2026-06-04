@@ -245,12 +245,90 @@ def _load_mt5_terminal(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.Da
     return _set_source(df, "mt5", "terminal", symbol, f"MT5 · {symbol}")
 
 
+# ─── Dukascopy feed (no API key) — primary VPS data when the MT5 bridge is off ──
+# Dukascopy Bank's free historical feed: strong forex + metals + indices + crypto
+# coverage, every common timeframe, no signup. Used before yfinance on the VPS so
+# intraday backtests work 24/7 regardless of whether the user's PC/bridge is up.
+_DUKA_INTERVAL = {
+    "M1": "INTERVAL_MIN_1",  "M5": "INTERVAL_MIN_5",  "M15": "INTERVAL_MIN_15",
+    "M30": "INTERVAL_MIN_30", "H1": "INTERVAL_HOUR_1", "H4": "INTERVAL_HOUR_4",
+    "D1": "INTERVAL_DAY_1",
+}
+_DUKA_TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+_DUKA_ALIAS = {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}
+_DUKA_CAT_PRIORITY = ("METALS", "MAJORS", "CROSSES", "EXOTICS")
+_duka_symbol_cache: dict = {}
+
+
+def _duka_resolve_instrument(symbol: str):
+    """Map an Edgekit symbol (e.g. XAUUSD, EURUSD) to a Dukascopy instrument
+    constant. Returns the constant value, or None if unmapped."""
+    from dukascopy_python import instruments as I
+    s = "".join(ch for ch in symbol.upper() if ch.isalnum())
+    s = _DUKA_ALIAS.get(s, s)
+    if s in _duka_symbol_cache:
+        return _duka_symbol_cache[s]
+    const = None
+    if len(s) == 6:                       # standard FX / metal pair → BASE+QUOTE
+        suffix = f"_{s[:3]}_{s[3:]}"
+        names = [n for n in dir(I) if n.startswith("INSTRUMENT_") and n.endswith(suffix)]
+        if names:
+            def _rank(n: str) -> int:
+                for i, cat in enumerate(_DUKA_CAT_PRIORITY):
+                    if f"_{cat}_" in n:
+                        return i
+                return len(_DUKA_CAT_PRIORITY)
+            names.sort(key=_rank)
+            const = getattr(I, names[0])
+    _duka_symbol_cache[s] = const
+    return const
+
+
+def _load_dukascopy(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
+    """Fetch OHLCV from Dukascopy's free historical feed (no API key)."""
+    import logging
+    logging.getLogger("DUKASCRIPT").setLevel(logging.WARNING)   # silence per-fetch info logs
+    import dukascopy_python
+    from datetime import datetime, timedelta, timezone
+
+    iv_name = _DUKA_INTERVAL.get(timeframe.upper())
+    if iv_name is None:
+        raise ValueError(f"Unsupported timeframe for Dukascopy: {timeframe}")
+    instrument = _duka_resolve_instrument(symbol)
+    if instrument is None:
+        raise RuntimeError(f"Dukascopy has no instrument for {symbol}")
+
+    # Enough calendar span to yield n_bars (markets ~5/7 days) + buffer, capped.
+    tf_min    = _DUKA_TF_MINUTES[timeframe.upper()]
+    span_days = (tf_min * n_bars) / (60 * 24) * (7 / 5) * 1.3 + 3
+    span_days = min(max(span_days, 3), 2000)
+    end   = datetime.now(timezone.utc)
+    start = end - timedelta(days=span_days)
+
+    df = dukascopy_python.fetch(
+        instrument, getattr(dukascopy_python, iv_name),
+        dukascopy_python.OFFER_SIDE_BID, start, end,
+    )
+    if df is None or len(df) == 0:
+        raise RuntimeError(f"Dukascopy returned no data for {symbol} {timeframe}")
+
+    df = df.rename(columns={"open": "O", "high": "H", "low": "L", "close": "C", "volume": "V"})
+    df.index.name = "time"
+    df = df.reset_index()
+    df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_localize(None)
+    keep = [c for c in ("time", "O", "H", "L", "C", "V") if c in df.columns]
+    df = df[keep].dropna(subset=["O", "H", "L", "C"]).reset_index(drop=True)
+    if len(df) > n_bars:
+        df = df.iloc[-n_bars:].reset_index(drop=True)
+    return _set_source(df, "dukascopy", "feed", symbol, f"Dukascopy · {symbol}")
+
+
 def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
     """Resolve real bars for a symbol/timeframe, with caching + fallbacks.
 
     Resolution order:
       • Windows (dev): local MT5 terminal.
-      • Linux (VPS):   MT5 bridge (user's PC) → yfinance fallback (clearly labeled).
+      • Linux (VPS):   MT5 bridge (user's PC) → Dukascopy (free, no key) → yfinance.
     The returned frame carries its origin in ``df.attrs['data_source']`` so the
     API and UI can show exactly which data was used (no more silent swaps).
     """
@@ -270,11 +348,16 @@ def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
             df = None   # MT5 package missing even on Windows — fall through
 
     if df is None:
-        # VPS path (or terminal unavailable): prefer the bridge, then yfinance.
+        # VPS path (or terminal unavailable): prefer the user's MT5 bridge, then
+        # Dukascopy's free feed (real forex/metals intraday, no key), then
+        # yfinance as a last resort.
         try:
             df = load_bridge(symbol, timeframe, n_bars)
         except Exception:
-            df = _load_yfinance(symbol, timeframe, n_bars)
+            try:
+                df = _load_dukascopy(symbol, timeframe, n_bars)
+            except Exception:
+                df = _load_yfinance(symbol, timeframe, n_bars)
 
     _cache_put(key, df)
     return df

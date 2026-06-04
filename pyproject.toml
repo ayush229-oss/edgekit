@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=1.24",
     "MetaTrader5; sys_platform == 'win32'",
     "yfinance>=0.2",
+    "dukascopy-python>=4.0",
 ]
 
 [project.optional-dependencies]
