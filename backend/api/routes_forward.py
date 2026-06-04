@@ -229,6 +229,64 @@ def _live_rollup(ft: ForwardTest, db: Session) -> Dict[str, Any]:
     }
 
 
+def _supa_live_rollup(ft_vps_id: int) -> Dict[str, Any]:
+    """Read the live-trade ledger from Supabase instead of SQLite."""
+    from backend.api import supa as _supa
+    rows   = _supa.get_live_trades(ft_vps_id)
+    opens  = [r for r in rows if r.get("action") == "open"]
+    closes = [r for r in rows if r.get("action") == "close"]
+    n      = len(closes)
+    wins   = [r for r in closes if (r.get("profit") or 0) > 0]
+    total_profit = float(sum(r.get("profit") or 0 for r in closes))
+    return {
+        "mode": "live_demo",
+        "metrics": {
+            "trades":         n,
+            "wr":             (len(wins) / n * 100.0) if n else 0.0,
+            "total_profit":   total_profit,
+            "open_positions": max(0, len(opens) - len(closes)),
+        },
+        "costs": {
+            "total_spread":   float(sum(r.get("spread") or 0 for r in opens)),
+            "total_slippage": float(sum(abs(r.get("slippage") or 0) for r in opens)),
+        },
+        "trades": [{
+            "side": r.get("side"), "fill_price": r.get("fill_price"),
+            "profit": r.get("profit"), "spread": r.get("spread"),
+            "slippage": r.get("slippage"), "time": r.get("ts"),
+        } for r in closes[-100:]],
+        "events":   len(rows),
+        "last_run": rows[-1].get("ts") if rows else None,
+    }
+
+
+def _supa_summary(row: dict) -> Dict[str, Any]:
+    """Convert a Supabase forward_tests row into the API summary shape."""
+    mgmt = row.get("mgmt") or {}
+    mode = mgmt.get("mode", "sim")
+    if mode == "live_demo":
+        vps_id = row.get("vps_id")
+        try:
+            latest: Any = _supa_live_rollup(vps_id) if vps_id else {}
+        except Exception:
+            latest = row.get("latest") or {}
+    else:
+        latest = row.get("latest") or {}
+    return {
+        "id":         row.get("vps_id"),
+        "name":       row.get("name", ""),
+        "symbol":     row.get("symbol", ""),
+        "timeframe":  row.get("timeframe", ""),
+        "mode":       mode,
+        "status":     row.get("status", ""),
+        "started_at": row.get("started_at"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "baseline":   row.get("baseline") or {},
+        "latest":     latest,
+    }
+
+
 def _user_id(db: Session, x_dev_user: Optional[str], authorization: Optional[str]) -> Optional[int]:
     try:
         from backend.api.auth import current_user
@@ -307,15 +365,36 @@ def forward_list(
     x_dev_user:    Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> List[Dict[str, Any]]:
+    # Use SQLite only for user-scoped id lookup; fetch display data from Supabase.
     uid = _user_id(db, x_dev_user, authorization)
     q = db.query(ForwardTest)
     q = q.filter(ForwardTest.user_id == uid) if uid is not None else q.filter(ForwardTest.user_id.is_(None))
-    rows = q.order_by(ForwardTest.created_at.desc()).all()
-    return [_summary(ft, db) for ft in rows]
+    sqlite_rows = q.order_by(ForwardTest.created_at.desc()).all()
+    if not sqlite_rows:
+        return []
+    from backend.api import supa as _supa
+    if _supa.enabled():
+        try:
+            vps_ids = [ft.id for ft in sqlite_rows]
+            supa_rows = _supa.get_forward_tests_by_vps_ids(vps_ids)
+            if supa_rows:
+                supa_rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+                return [_supa_summary(r) for r in supa_rows]
+        except Exception:
+            pass
+    return [_summary(ft, db) for ft in sqlite_rows]
 
 
 @router.get("/{ft_id}")
 def forward_get(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    from backend.api import supa as _supa
+    if _supa.enabled():
+        try:
+            row = _supa.get_forward_test(ft_id)
+            if row:
+                return _supa_summary(row)
+        except Exception:
+            pass
     ft = db.get(ForwardTest, ft_id)
     if not ft:
         raise HTTPException(404, "Forward test not found.")
@@ -328,7 +407,15 @@ def forward_refresh(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]
     if not ft:
         raise HTTPException(404, "Forward test not found.")
     if _mode(ft) == "sim":
-        _refresh(ft, db)
+        _refresh(ft, db)  # writes to SQLite + mirrors to Supabase
+    from backend.api import supa as _supa
+    if _supa.enabled():
+        try:
+            row = _supa.get_forward_test(ft_id)
+            if row:
+                return _supa_summary(row)
+        except Exception:
+            pass
     return _summary(ft, db)
 
 
@@ -347,6 +434,13 @@ def forward_stop(ft_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
         started_at=ft.started_at.isoformat() if ft.started_at else None,
         status=ft.status, latest=ft.latest,
     )
+    if _supa.enabled():
+        try:
+            row = _supa.get_forward_test(ft_id)
+            if row:
+                return _supa_summary(row)
+        except Exception:
+            pass
     return _summary(ft, db)
 
 

@@ -141,6 +141,23 @@ def upsert_forward_test(*, vps_id: int, user_id, name, symbol, timeframe,
         pass
 
 
+# ── Read helpers (raise on error — callers wrap in try/except) ───────────────
+def get_forward_test(vps_id: int) -> Optional[dict]:
+    rows = select("forward_tests", {"vps_id": f"eq.{vps_id}"})
+    return rows[0] if rows else None
+
+
+def get_forward_tests_by_vps_ids(vps_ids: list) -> list[dict]:
+    if not vps_ids:
+        return []
+    ids_str = "(" + ",".join(str(i) for i in vps_ids) + ")"
+    return select("forward_tests", {"vps_id": f"in.{ids_str}"})
+
+
+def get_live_trades(ft_vps_id: int) -> list[dict]:
+    return select("live_trades", {"ft_vps_id": f"eq.{ft_vps_id}", "order": "ts.asc"})
+
+
 def log_live_trade(*, vps_id: int, ft_vps_id: int, ts, action, symbol, side,
                    volume, requested_price, fill_price, slippage, spread,
                    sl, tp, ticket, profit, comment) -> None:
