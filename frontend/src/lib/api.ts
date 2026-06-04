@@ -16,6 +16,17 @@ export const API_URL =
     // Browser: always use /api proxy to avoid mixed-content (HTTPS → HTTP) blocks
     : "/api";
 
+// fetch wrapper that injects the shared API key on SERVER-side calls only.
+// Server (SSR/RSC) calls hit the VPS directly and must carry the key.
+// Browser calls go through /api → the Next.js middleware injects the key there,
+// so we must NOT expose it client-side (window defined → no header added).
+export function efetch(input: string, init: Parameters<typeof fetch>[1] = {}): Promise<Response> {
+  if (typeof window === "undefined" && process.env.EDGEKIT_API_KEY) {
+    init = { ...init, headers: { ...(init?.headers || {}), "x-api-key": process.env.EDGEKIT_API_KEY } };
+  }
+  return fetch(input, init);
+}
+
 export type ParamSpec = {
   key: string; label: string; type: "int" | "float" | "select" | "bool";
   default: any; min?: number; max?: number; step?: number;
@@ -81,13 +92,13 @@ export type BacktestResponse = {
 };
 
 export async function listStrategies(): Promise<StrategySummary[]> {
-  const r = await fetch(`${API_URL}/strategies`, { next: { revalidate: 300 } });
+  const r = await efetch(`${API_URL}/strategies`, { next: { revalidate: 300 } });
   if (!r.ok) throw new Error(`listStrategies: ${r.status}`);
   return r.json();
 }
 
 export async function runBacktest(body: any): Promise<BacktestResponse> {
-  const r = await fetch(`${API_URL}/backtest`, {
+  const r = await efetch(`${API_URL}/backtest`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
@@ -128,35 +139,6 @@ export type TemplateSummary = {
   name:        string;
   description: string;
 };
-
-export async function listNodeLibrary(): Promise<NodeSpec[]> {
-  const r = await fetch(`${API_URL}/graph/nodes`, { cache: "no-store" });
-  if (!r.ok) throw new Error(`listNodeLibrary: ${r.status}`);
-  return r.json();
-}
-
-export async function listGraphTemplates(): Promise<TemplateSummary[]> {
-  const r = await fetch(`${API_URL}/graph/templates`, { cache: "no-store" });
-  if (!r.ok) throw new Error(`listGraphTemplates: ${r.status}`);
-  return r.json();
-}
-
-export async function getGraphTemplate(id: string): Promise<StrategyGraph> {
-  const r = await fetch(`${API_URL}/graph/templates/${id}`, { cache: "no-store" });
-  if (!r.ok) throw new Error(`getGraphTemplate: ${r.status}`);
-  return r.json();
-}
-
-export async function runGraphBacktest(body: any): Promise<BacktestResponse> {
-  const r = await fetch(`${API_URL}/graph/backtest`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error((await r.text()) || `graph backtest: ${r.status}`);
-  return r.json();
-}
-
 
 // ─── v2 graph builder — typed-port, multi-lane ──────────────────────────────
 export type V2PortType =
@@ -215,31 +197,31 @@ export type SymbolInfo = {
 };
 
 export async function v2ListSymbols(): Promise<{ source: "mt5" | "static"; symbols: SymbolInfo[] }> {
-  const r = await fetch(`${API_URL}/graph/v2/symbols`, { cache: "no-store" });
+  const r = await efetch(`${API_URL}/graph/v2/symbols`, { cache: "no-store" });
   if (!r.ok) throw new Error(`v2ListSymbols: ${r.status}`);
   return r.json();
 }
 
 export async function v2ListNodes(): Promise<V2NodeSpec[]> {
-  const r = await fetch(`${API_URL}/graph/v2/nodes`, { cache: "no-store" });
+  const r = await efetch(`${API_URL}/graph/v2/nodes`, { cache: "no-store" });
   if (!r.ok) throw new Error(`v2ListNodes: ${r.status}`);
   return r.json();
 }
 
 export async function v2ListTemplates(): Promise<TemplateSummary[]> {
-  const r = await fetch(`${API_URL}/graph/v2/templates`, { cache: "no-store" });
+  const r = await efetch(`${API_URL}/graph/v2/templates`, { cache: "no-store" });
   if (!r.ok) throw new Error(`v2ListTemplates: ${r.status}`);
   return r.json();
 }
 
 export async function v2GetTemplate(id: string): Promise<V2Graph> {
-  const r = await fetch(`${API_URL}/graph/v2/templates/${id}`, { cache: "no-store" });
+  const r = await efetch(`${API_URL}/graph/v2/templates/${id}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`v2GetTemplate: ${r.status}`);
   return r.json();
 }
 
 export async function v2Complexity(graph: V2Graph): Promise<V2Complexity> {
-  const r = await fetch(`${API_URL}/graph/v2/complexity`, {
+  const r = await efetch(`${API_URL}/graph/v2/complexity`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ graph }),
@@ -302,7 +284,7 @@ export type ChartArtifact = {
 };
 
 export async function v2ChartPreview(body: any): Promise<ChartPreview> {
-  const r = await fetch(`${API_URL}/graph/v2/chart-preview`, {
+  const r = await efetch(`${API_URL}/graph/v2/chart-preview`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
@@ -414,7 +396,7 @@ export async function v2FromText(body: { description: string; symbol?: string; t
     headers["X-AI-Provider"] = ai.provider;
   }
 
-  const r = await fetch(`${API_URL}/graph/v2/from-text`, {
+  const r = await efetch(`${API_URL}/graph/v2/from-text`, {
     method:  "POST",
     headers,
     body:    JSON.stringify(body),
@@ -451,7 +433,7 @@ export async function v2Chat(body: {
   }
   const model = getAIModel();
   if (model) headers["X-AI-Model"] = model;
-  const r = await fetch(`${API_URL}/graph/v2/chat`, {
+  const r = await efetch(`${API_URL}/graph/v2/chat`, {
     method:  "POST",
     headers,
     body:    JSON.stringify(body),
@@ -461,13 +443,13 @@ export async function v2Chat(body: {
 }
 
 export async function getGlobalStats(): Promise<{ total_backtests: number; total_users: number }> {
-  const r = await fetch(`${API_URL}/stats/global`, { next: { revalidate: 60 } } as any);
+  const r = await efetch(`${API_URL}/stats/global`, { next: { revalidate: 60 } } as any);
   if (!r.ok) return { total_backtests: 0, total_users: 0 };
   return r.json();
 }
 
 export async function v2ExportPineScript(body: any): Promise<{ code: string; lines: number }> {
-  const r = await fetch(`${API_URL}/graph/v2/pinescript`, {
+  const r = await efetch(`${API_URL}/graph/v2/pinescript`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
@@ -477,7 +459,7 @@ export async function v2ExportPineScript(body: any): Promise<{ code: string; lin
 }
 
 export async function v2RunBacktest(body: any): Promise<BacktestResponse> {
-  const r = await fetch(`${API_URL}/graph/v2/backtest`, {
+  const r = await efetch(`${API_URL}/graph/v2/backtest`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
@@ -519,7 +501,7 @@ export async function forwardStart(body: {
   mode?: "sim" | "live_demo";
   mgmt?: Record<string, any>; baseline?: Record<string, any>;
 }): Promise<ForwardTest> {
-  const r = await fetch(`${API_URL}/forward/start`, {
+  const r = await efetch(`${API_URL}/forward/start`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -527,17 +509,17 @@ export async function forwardStart(body: {
   return r.json();
 }
 export async function forwardList(): Promise<ForwardTest[]> {
-  const r = await fetch(`${API_URL}/forward/list`, { cache: "no-store" });
+  const r = await efetch(`${API_URL}/forward/list`, { cache: "no-store" });
   if (!r.ok) throw new Error(`forward list: ${r.status}`);
   return r.json();
 }
 export async function forwardRefresh(id: number): Promise<ForwardTest> {
-  const r = await fetch(`${API_URL}/forward/${id}/refresh`, { method: "POST" });
+  const r = await efetch(`${API_URL}/forward/${id}/refresh`, { method: "POST" });
   if (!r.ok) throw new Error(`forward refresh: ${r.status}`);
   return r.json();
 }
 export async function forwardStop(id: number): Promise<ForwardTest> {
-  const r = await fetch(`${API_URL}/forward/${id}/stop`, { method: "POST" });
+  const r = await efetch(`${API_URL}/forward/${id}/stop`, { method: "POST" });
   if (!r.ok) throw new Error(`forward stop: ${r.status}`);
   return r.json();
 }

@@ -17,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger VPS deploy webhook
+        env:
+          EDGEKIT_API_KEY: ${{ secrets.EDGEKIT_API_KEY }}
         run: |
-          response=$(curl -fsS --max-time 30 -X POST "http://165.232.178.128:8765/internal/deploy")
+          response=$(curl -fsS --max-time 30 -X POST \
+            -H "X-API-Key: ${EDGEKIT_API_KEY}" \
+            "http://165.232.178.128:8765/internal/deploy")
           echo "Deploy triggered: $response"

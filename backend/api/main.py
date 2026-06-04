@@ -43,7 +43,6 @@ from backend.api.limits  import enforce_backtest_quota, require_csv_upload
 from backend.api.billing import router as billing_router
 from backend.api.routes_user import router as user_router
 from backend.api.preview import router as preview_router
-from backend.api.routes_graph    import router as graph_router
 from backend.api.routes_graph_v2 import router as graph_v2_router
 from backend.api.routes_forward  import router as forward_router, start_forward_scheduler
 from backend.db import get_db, init_db, BacktestRun, User
@@ -101,6 +100,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Shared-secret API key ─────────────────────────────────────────────────────
+# The VPS is publicly reachable on :8765. Require a secret header on every
+# request so only our Vercel frontend (which injects it server-side) can call.
+#
+# FAIL-OPEN: if EDGEKIT_API_KEY is not set, enforcement is disabled. This lets
+# us deploy this code with zero behaviour change, then flip protection on by
+# setting the env var last (and unset it for an instant rollback).
+#
+# /healthz stays public so uptime monitors (UptimeRobot) can probe it.
+_API_KEY = _os.environ.get("EDGEKIT_API_KEY", "")
+_KEY_PUBLIC_PATHS = {"/healthz"}
+
+@app.middleware("http")
+async def _require_api_key(request: Request, call_next):
+    if (
+        _API_KEY
+        and request.method != "OPTIONS"                  # never block CORS preflight
+        and request.url.path not in _KEY_PUBLIC_PATHS
+    ):
+        if request.headers.get("x-api-key") != _API_KEY:
+            origin = request.headers.get("origin", "*")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid API key"},
+                headers={
+                    "Access-Control-Allow-Origin":      origin,
+                    "Access-Control-Allow-Credentials": "true",
+                },
+            )
+    return await call_next(request)
+
 # Initialize DB tables + start the forward-test refresh loop on startup
 @app.on_event("startup")
 def _startup():
@@ -111,7 +141,6 @@ def _startup():
 app.include_router(billing_router)
 app.include_router(user_router)
 app.include_router(preview_router)
-app.include_router(graph_router)
 app.include_router(graph_v2_router)
 app.include_router(forward_router)
 
