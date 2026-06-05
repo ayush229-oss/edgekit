@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createChart,
   CandlestickSeries,
-  LineSeries,
+  LineSeries,      // still used by strategy indicators
   HistogramSeries,
   createSeriesMarkers,
   CrosshairMode,
@@ -121,6 +121,99 @@ class ZonesRenderer {
 }
 
 
+// ── Position-box primitive ────────────────────────────────────────────────
+// Renders TradingView-style long / short position boxes for every trade:
+//   • filled green zone  → entry ↔ TP  (profit)
+//   • filled red zone    → SL ↔ entry  (loss)
+//   • solid entry line, dashed SL and TP lines
+//   • left edge: thin vertical at the fill bar
+// Selected trade renders at full opacity; others are faded.
+type TBox = {
+  t1: UTCTimestamp; t2: UTCTimestamp;
+  entry: number; sl: number; tp: number;
+  isBull: boolean; sel: boolean;
+};
+
+class PositionBoxesPrimitive {
+  _chart: IChartApi | null = null;
+  _series: ISeriesApi<"Candlestick"> | null = null;
+  _requestUpdate?: () => void;
+  _boxes: TBox[] = [];
+  _paneViews: any[];
+  constructor() { this._paneViews = [new PositionBoxesPaneView(this)]; }
+  attached(p: any) { this._chart = p.chart; this._series = p.series; this._requestUpdate = p.requestUpdate; }
+  detached() { this._chart = null; this._series = null; }
+  updateAllViews() {}
+  paneViews() { return this._paneViews; }
+  setBoxes(b: TBox[]) { this._boxes = b; this._requestUpdate?.(); }
+}
+class PositionBoxesPaneView {
+  constructor(private _src: PositionBoxesPrimitive) {}
+  update() {}
+  renderer() { return new PositionBoxesRenderer(this._src); }
+}
+class PositionBoxesRenderer {
+  constructor(private _src: PositionBoxesPrimitive) {}
+  draw(target: any) {
+    const { _chart: chart, _series: series, _boxes: boxes } = this._src;
+    if (!chart || !series || !boxes.length) return;
+    const ts = chart.timeScale();
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx: CanvasRenderingContext2D = scope.context;
+      const hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
+
+      for (const box of boxes) {
+        const x1 = ts.timeToCoordinate(box.t1);
+        const x2 = ts.timeToCoordinate(box.t2);
+        if (x1 == null || x2 == null) continue;
+        const yE = series.priceToCoordinate(box.entry);
+        const yS = series.priceToCoordinate(box.sl);
+        const yT = series.priceToCoordinate(box.tp);
+        if (yE == null || yS == null || yT == null) continue;
+
+        const left  = Math.min(x1, x2) * hr;
+        const right = Math.max(x1, x2) * hr;
+        const w     = Math.max(2, right - left);
+        const a     = box.sel ? 0.26 : 0.12;   // fill alpha
+
+        // Profit zone (entry ↔ tp)
+        ctx.fillStyle = `rgba(107,155,122,${a})`;
+        ctx.fillRect(left, Math.min(yE, yT) * vr, w, Math.abs(yT - yE) * vr);
+
+        // Loss zone (entry ↔ sl)
+        ctx.fillStyle = `rgba(201,123,99,${a})`;
+        ctx.fillRect(left, Math.min(yE, yS) * vr, w, Math.abs(yS - yE) * vr);
+
+        const lw = (box.sel ? 1.5 : 1) * hr;
+
+        // TP line — dashed sage
+        ctx.strokeStyle = box.sel ? "rgba(107,155,122,1.0)" : "rgba(107,155,122,0.65)";
+        ctx.lineWidth = lw; ctx.setLineDash([4 * hr, 3 * hr]);
+        ctx.beginPath(); ctx.moveTo(left, yT * vr); ctx.lineTo(right, yT * vr); ctx.stroke();
+
+        // SL line — dashed terra
+        ctx.strokeStyle = box.sel ? "rgba(201,123,99,1.0)" : "rgba(201,123,99,0.65)";
+        ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.moveTo(left, yS * vr); ctx.lineTo(right, yS * vr); ctx.stroke();
+
+        // Entry line — solid ink
+        ctx.strokeStyle = box.sel ? "rgba(44,62,45,1.0)" : "rgba(44,62,45,0.55)";
+        ctx.lineWidth = lw; ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(left, yE * vr); ctx.lineTo(right, yE * vr); ctx.stroke();
+
+        // Left-edge vertical at entry bar (direction colour)
+        ctx.strokeStyle = box.isBull ? "rgba(107,155,122,0.6)" : "rgba(201,123,99,0.6)";
+        ctx.lineWidth = 2 * hr;
+        ctx.beginPath();
+        ctx.moveTo(x1 * hr, Math.min(yS, yT) * vr);
+        ctx.lineTo(x1 * hr, Math.max(yS, yT) * vr);
+        ctx.stroke();
+      }
+    });
+  }
+}
+
+
 // Compute target price from entry / sl / direction / target_r
 function tpPrice(tr: ChartTrade, targetR: number) {
   const r1 = Math.abs(tr.entry - tr.sl);
@@ -158,10 +251,9 @@ export function ChartPreview({
   const candlesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const markersRef    = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
-  // Optional overlay series — created/destroyed when toggles flip
-  const zoneEntryRef  = useRef<ISeriesApi<"Line">      | null>(null);
-  const zoneSLRef     = useRef<ISeriesApi<"Line">      | null>(null);
-  const zoneTPRef     = useRef<ISeriesApi<"Line">      | null>(null);
+  // Position-box primitive (replaces the 3 sparse line-series approach)
+  const posBoxPrimRef = useRef<PositionBoxesPrimitive | null>(null);
+  // Ribbon overlay series
   const ribbonRef     = useRef<ISeriesApi<"Histogram"> | null>(null);
 
   // Strategy indicator lines (EMA, Donchian, Bollinger, etc.) — rebuilt with the chart
@@ -260,12 +352,19 @@ export function ChartPreview({
     );
     candlesRef.current = candles;
 
-    // Attach the structural-zone primitive (filled by the showStructures effect)
+    // Attach the structural-zone primitive (OB/FVG/swept levels)
     try {
       const zp = new ZonesPrimitive();
       (candles as any).attachPrimitive?.(zp);
       zonesPrimRef.current = zp;
     } catch { zonesPrimRef.current = null; }
+
+    // Attach the position-boxes primitive (trade entry/SL/TP boxes)
+    try {
+      const pb = new PositionBoxesPrimitive();
+      (candles as any).attachPrimitive?.(pb);
+      posBoxPrimRef.current = pb;
+    } catch { posBoxPrimRef.current = null; }
 
     // ── Markers: small dots only — NO text labels (those go on selection) ──
     type M = {
@@ -338,13 +437,11 @@ export function ChartPreview({
     return () => {
       ro.disconnect();
       markersRef.current?.detach();
-      markersRef.current   = null;
-      candlesRef.current   = null;
-      zonesPrimRef.current = null;
-      zoneEntryRef.current = null;
-      zoneSLRef.current    = null;
-      zoneTPRef.current    = null;
-      ribbonRef.current    = null;
+      markersRef.current    = null;
+      candlesRef.current    = null;
+      zonesPrimRef.current  = null;
+      posBoxPrimRef.current = null;
+      ribbonRef.current     = null;
       indicatorRefs.current = [];
       selPriceLinesRef.current = [];
       chart.remove();
@@ -442,59 +539,36 @@ export function ChartPreview({
   }, [data, showStructures]);
 
 
-  // ── Toggle 1: R/R zones (Entry / SL / TP segments for ALL trades) ────
+  // ── Toggle 1: Position boxes (replaces 3 sparse line series) ────────
+  // Draws a TradingView-style long/short position tool for every trade:
+  //   green filled zone = profit side (entry→TP), red = loss side (SL→entry)
+  //   selected trade renders at full opacity; all others are faded.
   useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || !data) return;
+    const pb = posBoxPrimRef.current;
+    if (!pb || !data) return;
 
-    // Tear down if turned off
-    if (!showZones) {
-      if (zoneEntryRef.current) { chart.removeSeries(zoneEntryRef.current); zoneEntryRef.current = null; }
-      if (zoneSLRef.current)    { chart.removeSeries(zoneSLRef.current);    zoneSLRef.current    = null; }
-      if (zoneTPRef.current)    { chart.removeSeries(zoneTPRef.current);    zoneTPRef.current    = null; }
-      return;
-    }
+    if (!showZones) { pb.setBoxes([]); return; }
 
-    // Build three sparse line series — values only present while a trade is
-    // active, undefined otherwise → segments don't extend across the chart.
-    const entryArr: Array<{ time: UTCTimestamp; value?: number }> = [];
-    const slArr:    Array<{ time: UTCTimestamp; value?: number }> = [];
-    const tpArr:    Array<{ time: UTCTimestamp; value?: number }> = [];
-
-    data.bars.forEach((b, i) => {
-      const active = data.trades.find((tr) => activeAt(tr, i));
-      const t = b.t as UTCTimestamp;
-      if (active) {
-        entryArr.push({ time: t, value: active.entry });
-        slArr   .push({ time: t, value: active.sl    });
-        tpArr   .push({ time: t, value: tpPrice(active, mgmt.target_r ?? 3) });
-      } else {
-        entryArr.push({ time: t });
-        slArr   .push({ time: t });
-        tpArr   .push({ time: t });
-      }
+    const tR = mgmt.target_r ?? 3;
+    const boxes: TBox[] = [];
+    data.trades.forEach((tr, i) => {
+      const fi = tr.fill_idx ?? tr.signal_idx;
+      const ei = tr.exit_idx ?? Math.min(data.bars.length - 1, fi + 60);
+      const b1 = data.bars[fi];
+      const b2 = data.bars[ei];
+      if (!b1 || !b2) return;
+      boxes.push({
+        t1:     b1.t as UTCTimestamp,
+        t2:     b2.t as UTCTimestamp,
+        entry:  tr.entry,
+        sl:     tr.sl,
+        tp:     tpPrice(tr, tR),
+        isBull: tr.direction === "Bull",
+        sel:    i === selIdx,
+      });
     });
-
-    const entryS = chart.addSeries(LineSeries, {
-      color: C.ink, lineWidth: 1, lineStyle: LineStyle.Solid,
-      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-    });
-    const slS = chart.addSeries(LineSeries, {
-      color: C.terra, lineWidth: 1, lineStyle: LineStyle.Dashed,
-      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-    });
-    const tpS = chart.addSeries(LineSeries, {
-      color: C.sage, lineWidth: 1, lineStyle: LineStyle.Dashed,
-      crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-    });
-    entryS.setData(entryArr as any);
-    slS   .setData(slArr    as any);
-    tpS   .setData(tpArr    as any);
-
-    zoneEntryRef.current = entryS;
-    zoneSLRef.current    = slS;
-    zoneTPRef.current    = tpS;
-  }, [showZones, data, mgmt.target_r]);
+    pb.setBoxes(boxes);
+  }, [showZones, data, mgmt.target_r, selIdx]);
 
 
   // ── Toggle 2: Position ribbon (histogram at the bottom) ──────────────
@@ -707,11 +781,11 @@ export function ChartPreview({
             </button>
             <button
               onClick={() => setShowZones((v) => !v)}
-              title="Show Entry / SL / TP segments for every trade (only while live)"
+              title="Show TradingView-style position boxes for every trade — green profit zone, red loss zone, entry/SL/TP lines"
               className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5
                 ${showZones ? "bg-sage/15 border-sage/40 text-sage" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${showZones ? "bg-sage" : "bg-muted"}`} />
-              R/R zones
+              Position tool
             </button>
             <button
               onClick={() => setShowRibbon((v) => !v)}
@@ -916,13 +990,13 @@ export function ChartPreview({
           {showZones && (
             <>
               <span className="flex items-center gap-1.5">
+                <span className="inline-block w-5 h-3 rounded-sm" style={{ background: "rgba(107,155,122,0.30)" }} /> Profit zone (entry→TP)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-5 h-3 rounded-sm" style={{ background: "rgba(201,123,99,0.30)" }} /> Loss zone (SL→entry)
+              </span>
+              <span className="flex items-center gap-1.5">
                 <span className="inline-block w-5 border-t" style={{ borderColor: C.ink }} /> Entry
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 border-t border-dashed" style={{ borderColor: C.terra }} /> SL
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 border-t border-dashed" style={{ borderColor: C.sage }} /> TP
               </span>
             </>
           )}
