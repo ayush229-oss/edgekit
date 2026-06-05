@@ -255,21 +255,63 @@ _DUKA_INTERVAL = {
     "D1": "INTERVAL_DAY_1",
 }
 _DUKA_TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
-_DUKA_ALIAS = {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}
-_DUKA_CAT_PRIORITY = ("METALS", "MAJORS", "CROSSES", "EXOTICS")
+
+# Symbol aliases: map common broker/MT5 names → canonical Dukascopy symbol
+_DUKA_ALIAS = {
+    "GOLD": "XAUUSD", "SILVER": "XAGUSD", "PLATINUM": "XPTUSD",
+    "WTI":  "USOIL",  "BRENT":  "UKOIL",  "OIL":      "USOIL",
+    "DJI":  "US30",   "DOW":    "US30",
+    "SPX":  "US500",  "SP500":  "US500",
+    "NDX":  "NAS100", "NASDAQ": "NAS100",
+    "DAX":  "GER40",  "GER30":  "GER40",
+    "FTSE": "UK100",
+    "N225": "JPN225", "NIK":    "JPN225",
+}
+
+# Explicit Dukascopy instrument-constant names for symbols that aren't standard
+# 6-char BASE+QUOTE pairs (indices, energies, platinum).
+# Found by inspecting `dir(dukascopy_python.instruments)` on the VPS.
+_DUKA_EXPLICIT: dict[str, str] = {
+    # Indices
+    "US30":   "INSTRUMENT_IDX_AMERICA_E_D_J_IND",
+    "US500":  "INSTRUMENT_IDX_AMERICA_E_SANDP_500",
+    "NAS100": "INSTRUMENT_IDX_AMERICA_E_NQ_100",
+    "GER40":  "INSTRUMENT_IDX_EUROPE_E_DAAX",
+    "UK100":  "INSTRUMENT_IDX_EUROPE_E_FUTSEE_100",
+    "JPN225": "INSTRUMENT_IDX_ASIA_E_N225JAP",
+    "AUS200": "INSTRUMENT_IDX_ASIA_E_XJO_ASX",
+    "HK50":   "INSTRUMENT_IDX_ASIA_E_H_KONG",
+    # Energies
+    "USOIL":  "INSTRUMENT_CMD_ENERGY_E_LIGHT",
+    "UKOIL":  "INSTRUMENT_CMD_ENERGY_E_BRENT",
+    "NGAS":   "INSTRUMENT_CMD_ENERGY_GAS_CMD_USD",
+    # Metals with non-standard Dukascopy naming
+    "XPTUSD": "INSTRUMENT_CMD_METALS_XPT_CMD_USD",
+    "XPDUSD": "INSTRUMENT_CMD_METALS_XPD_CMD_USD",
+}
+
+_DUKA_CAT_PRIORITY = ("METALS", "MAJORS", "CROSSES", "EXOTICS", "VCCY")
 _duka_symbol_cache: dict = {}
 
 
 def _duka_resolve_instrument(symbol: str):
-    """Map an Edgekit symbol (e.g. XAUUSD, EURUSD) to a Dukascopy instrument
-    constant. Returns the constant value, or None if unmapped."""
+    """Map an Edgekit symbol (e.g. XAUUSD, EURUSD, US30) to a Dukascopy
+    instrument constant. Returns the constant value, or None if unmapped."""
     from dukascopy_python import instruments as I
     s = "".join(ch for ch in symbol.upper() if ch.isalnum())
     s = _DUKA_ALIAS.get(s, s)
     if s in _duka_symbol_cache:
         return _duka_symbol_cache[s]
+
     const = None
-    if len(s) == 6:                       # standard FX / metal pair → BASE+QUOTE
+
+    # 1. Explicit map (indices, energies, non-standard metals)
+    if s in _DUKA_EXPLICIT:
+        const_name = _DUKA_EXPLICIT[s]
+        const = getattr(I, const_name, None)
+
+    # 2. Generic suffix search for standard 6-char BASE+QUOTE pairs (forex, metals, crypto)
+    if const is None and len(s) == 6:
         suffix = f"_{s[:3]}_{s[3:]}"
         names = [n for n in dir(I) if n.startswith("INSTRUMENT_") and n.endswith(suffix)]
         if names:
@@ -280,6 +322,7 @@ def _duka_resolve_instrument(symbol: str):
                 return len(_DUKA_CAT_PRIORITY)
             names.sort(key=_rank)
             const = getattr(I, names[0])
+
     _duka_symbol_cache[s] = const
     return const
 
@@ -464,14 +507,26 @@ def pip_size(symbol: str | None = None, price_sample: float | None = None) -> fl
         s = symbol.upper()
         if "XAU" in s or "GOLD" in s:            return 0.10
         if "XAG" in s or "SILVER" in s:          return 0.01
+        if "XPT" in s or "XPD" in s:             return 0.10    # Platinum / Palladium
         if "JPY" in s:                            return 0.01
         if any(fx in s for fx in ("EUR", "GBP", "AUD", "NZD", "CHF", "CAD")):
             return 0.0001
         if "USD" in s and len(s) == 6:            return 0.0001    # USDXXX or XXXUSD forex
         if any(c in s for c in ("BTC", "ETH", "BNB", "SOL", "XRP")):
             return 1.0
-        if any(c in s for c in ("NIFTY", "BANKNIFTY", "SENSEX", "NDX", "SPX", "DJI")):
-            return 1.0
+        # Indices — integer pip
+        if any(c in s for c in ("US30", "DJI", "DOW")):          return 1.0
+        if any(c in s for c in ("NAS100", "NDX", "NASDAQ")):      return 1.0
+        if any(c in s for c in ("US500", "SPX", "SP500")):        return 0.1
+        if any(c in s for c in ("GER40", "GER30", "DAX")):        return 1.0
+        if any(c in s for c in ("UK100", "FTSE")):                return 0.5
+        if any(c in s for c in ("JPN225", "N225", "NIK")):        return 1.0
+        if any(c in s for c in ("AUS200", "ASX")):                return 0.5
+        if any(c in s for c in ("NIFTY", "BANKNIFTY", "SENSEX")): return 1.0
+        # Energies
+        if any(c in s for c in ("OIL", "BRENT", "WTI", "USOIL", "UKOIL")):
+            return 0.01
+        if "NGAS" in s or "GAS" in s:             return 0.001
 
     if price_sample is not None and price_sample > 0:
         # Magnitude heuristic — works for unknown instruments
