@@ -183,19 +183,19 @@ function AISection() {
    MT5 CONNECTOR
    ───────────────────────────────────────────────────────────────────────────── */
 
+const EA_DOWNLOAD = "https://raw.githubusercontent.com/ayush229-oss/edgekit/main/bridge/EdgekitConnector.mq5";
+
 function MT5ConnectorSection() {
-  const [token,       setToken]     = useState<string | null>(null);
-  const [vpsUrl,      setVpsUrl]    = useState("http://165.232.178.128:8765");
-  const [generating,  setGenerating] = useState(false);
-  const [copied,      setCopied]    = useState(false);
-  const [error,       setError]     = useState<string | null>(null);
+  const [token,      setToken]      = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [copied,     setCopied]     = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
 
   async function generate() {
     setGenerating(true); setError(null);
     try {
       const d = await forwardGenerateBridgeToken();
       setToken(d.token);
-      setVpsUrl(d.vps_url);
     } catch (e: any) {
       setError(e?.message ?? "Failed to generate token");
     } finally {
@@ -206,105 +206,102 @@ function MT5ConnectorSection() {
   async function copy() {
     if (!token) return;
     try { await navigator.clipboard.writeText(token); setCopied(true); setTimeout(() => setCopied(false), 2000); }
-    catch { /* clipboard blocked */ }
+    catch { /* blocked */ }
   }
 
+  const isConnected = !!token;
+
   return (
-    <div className="card p-6 space-y-4">
+    <div className="card p-6 space-y-5">
       <div>
         <h2 className="font-semibold text-[16px]">🔌 Connect your MT5</h2>
         <p className="text-[12.5px] text-muted mt-1 leading-relaxed">
-          Run live-demo forward tests using your own broker feed. A small connector
-          script runs on your Windows PC next to MetaTrader 5 and reports real fills —
-          spread, slippage &amp; commission — back to Edgekit.
+          Run live-demo forward tests on your real broker feed.
+          An EA inside MT5 executes orders and Edgekit records real spread, slippage &amp; commission.
+          <strong className="text-ink"> No Python. No terminal. 3 steps.</strong>
         </p>
       </div>
 
-      {/* Step 1 — token */}
-      <div className="rounded-lg border border-border bg-paper p-4 space-y-3">
-        <p className="text-[12px] font-semibold text-ink">Step 1 — Get your personal token</p>
-        <p className="text-[11.5px] text-muted">
-          One token per account. Regenerating invalidates the old one.
-        </p>
+      {/* ── Step 1 ── */}
+      <div className={`rounded-xl border p-4 space-y-3 ${isConnected ? "border-money/40 bg-money/5" : "border-border bg-paper"}`}>
+        <div className="flex items-center gap-2">
+          <span className={`w-5 h-5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${isConnected ? "bg-money text-white" : "bg-surface2 text-muted"}`}>
+            {isConnected ? "✓" : "1"}
+          </span>
+          <p className="text-[13px] font-semibold text-ink">Get your token</p>
+        </div>
 
         {token ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <code className="flex-1 rounded bg-surface2 border border-border px-3 py-1.5 text-[11px] font-mono text-ink break-all">
+              <code className="flex-1 rounded-lg bg-surface2 border border-border px-3 py-2 text-[11px] font-mono text-ink break-all leading-relaxed">
                 {token}
               </code>
               <button onClick={() => void copy()}
-                className="shrink-0 px-3 py-1.5 rounded border border-border text-[12px] hover:bg-surface2 transition-colors">
-                {copied ? "✓" : "Copy"}
+                className="shrink-0 px-3 py-2 rounded-lg border border-border text-[12px] hover:bg-surface2 transition-colors">
+                {copied ? "✓ Copied" : "Copy"}
               </button>
             </div>
-            <p className="text-[11px] text-amber-700">Keep this private — it authenticates your MT5 to Edgekit.</p>
+            <p className="text-[11px] text-amber-700">Keep this private. Treat it like a password.</p>
+            <button onClick={() => void generate()} disabled={generating}
+              className="text-[11px] text-muted hover:text-ink underline">
+              {generating ? "Regenerating…" : "Regenerate token"}
+            </button>
           </div>
         ) : (
-          <button onClick={() => void generate()} disabled={generating}
-            className="w-full py-2 rounded-lg bg-money text-white text-[13px] font-medium hover:bg-moneyDark transition-colors disabled:opacity-50">
-            {generating ? "Generating…" : "Generate token"}
-          </button>
+          <>
+            <p className="text-[12px] text-muted">One token per account — links your MT5 to your Edgekit profile.</p>
+            <button onClick={() => void generate()} disabled={generating}
+              className="w-full py-2.5 rounded-lg bg-money text-white text-[13px] font-semibold hover:bg-moneyDark transition-colors disabled:opacity-50">
+              {generating ? "Generating…" : "Generate token"}
+            </button>
+          </>
         )}
-
         {error && <p className="text-[11px] text-down">{error}</p>}
-
-        {token && (
-          <button onClick={() => void generate()} disabled={generating}
-            className="text-[11px] text-muted hover:text-ink underline">
-            {generating ? "Regenerating…" : "Regenerate (invalidates old token)"}
-          </button>
-        )}
       </div>
 
-      {/* Step 2 — install */}
-      <div className="rounded-lg border border-border bg-paper p-4 space-y-2">
-        <p className="text-[12px] font-semibold text-ink">Step 2 — Install on your Windows PC</p>
-        <ol className="text-[11.5px] text-muted list-decimal list-inside space-y-1.5">
+      {/* ── Step 2 ── */}
+      <div className="rounded-xl border border-border bg-paper p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-surface2 text-muted text-[11px] font-bold flex items-center justify-center shrink-0">2</span>
+          <p className="text-[13px] font-semibold text-ink">Install the EA in MetaTrader 5</p>
+        </div>
+        <ol className="text-[12px] text-muted space-y-2 ml-7">
           <li>
-            Clone the repo:{" "}
-            <code className="bg-surface2 px-1 py-0.5 rounded text-[10.5px]">
-              git clone https://github.com/ayush229/edgekit.git
-            </code>
+            <a href={EA_DOWNLOAD} download="EdgekitConnector.mq5"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-money/10 text-money font-medium hover:bg-money/20 transition-colors text-[12px]">
+              ⬇ Download EdgekitConnector.mq5
+            </a>
           </li>
-          <li>
-            Install deps:{" "}
-            <code className="bg-surface2 px-1 py-0.5 rounded text-[10.5px]">
-              pip install MetaTrader5 httpx pandas numpy
-            </code>
+          <li>In MT5: <strong className="text-ink">File → Open Data Folder</strong> → go to <code className="bg-surface2 px-1 rounded text-[11px]">MQL5 / Experts</code> → paste the file there</li>
+          <li>Back in MT5: press <strong className="text-ink">F5</strong> in Navigator to refresh — the EA appears under <em>Experts</em></li>
+          <li><strong className="text-ink">Tools → Options → Expert Advisors</strong> → tick <em>"Allow WebRequest"</em> → add this URL:
+            <code className="block bg-surface2 rounded px-2 py-1 mt-1 text-[11px] font-mono text-ink">http://165.232.178.128:8765</code>
           </li>
-          <li>MT5 must be <strong className="text-ink">logged into a DEMO account</strong> and running.</li>
         </ol>
       </div>
 
-      {/* Step 3 — run */}
-      <div className="rounded-lg border border-border bg-paper p-4 space-y-2">
-        <p className="text-[12px] font-semibold text-ink">Step 3 — Run the connector</p>
-        <div className="space-y-1.5 text-[11.5px]">
-          <p className="text-muted">In a CMD window inside the cloned repo:</p>
-          <pre className="bg-surface2 rounded px-3 py-2 text-[10.5px] font-mono text-ink overflow-x-auto whitespace-pre-wrap break-all">
-{`set EDGEKIT_TOKEN=${token ?? "<your-token>"}
-set EDGEKIT_VPS=${vpsUrl}
-python -m bridge.connector`}
-          </pre>
-          <p className="text-muted text-[11px]">Leave this window open. It polls every 30 s for new signals.</p>
+      {/* ── Step 3 ── */}
+      <div className="rounded-xl border border-border bg-paper p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-surface2 text-muted text-[11px] font-bold flex items-center justify-center shrink-0">3</span>
+          <p className="text-[13px] font-semibold text-ink">Attach to a chart &amp; enter your token</p>
         </div>
-      </div>
-
-      {/* Step 4 — start a live test */}
-      <div className="rounded-lg border border-border bg-paper p-4 space-y-2">
-        <p className="text-[12px] font-semibold text-ink">Step 4 — Start a live-demo forward test</p>
-        <p className="text-[11.5px] text-muted">
-          Go to the <a href="/builder" className="text-money hover:underline">Builder</a>,
-          build a strategy, run a backtest — then click{" "}
-          <strong className="text-ink">🔴 Live (demo)</strong> to start a live forward test.
-          The connector will place orders automatically.
+        <ol className="text-[12px] text-muted space-y-1.5 ml-7">
+          <li>MT5 must be logged into a <strong className="text-ink">DEMO account</strong></li>
+          <li>Drag <strong className="text-ink">EdgekitConnector</strong> from Navigator onto any chart</li>
+          <li>In the EA Properties (F7) → <strong className="text-ink">Inputs</strong> → paste your token into <code className="bg-surface2 px-1 rounded text-[11px]">Bridge token</code></li>
+          <li>Click OK — the EA is now live</li>
+        </ol>
+        <p className="text-[11px] text-muted ml-7">
+          Then go to <a href="/builder" className="text-money hover:underline">Builder</a>,
+          finish a backtest, and click <strong className="text-ink">🔴 Live (demo)</strong> to start a forward test.
+          The EA will place orders the next time your strategy signals.
         </p>
       </div>
 
-      <p className="text-[11px] text-muted leading-relaxed">
-        The connector only ever touches your MT5 DEMO account and only positions it opened itself
-        (tagged with magic number 770011). Real-account trading is blocked in code.
+      <p className="text-[11px] text-muted border-t border-border pt-3">
+        The EA only trades your <strong>DEMO</strong> account and only touches positions it opened itself (magic 770011). Real-money trading is blocked in code.
       </p>
     </div>
   );

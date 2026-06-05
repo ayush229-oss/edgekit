@@ -435,6 +435,97 @@ def bridge_token_generate(
     return {"token": token, "vps_url": _os.environ.get("VPS_PUBLIC_URL", "http://165.232.178.128:8765")}
 
 
+def _latest_signal(row: dict) -> Optional[Dict[str, Any]]:
+    """Evaluate a live_demo forward test server-side and return a pending signal.
+
+    Returns None if:
+    - The strategy fires no signal on the latest bar, OR
+    - There is already an open position (live_trades ledger has an unmatched open).
+
+    This lets connectors/EAs be dumb executors — no strategy engine needed client-side.
+    """
+    from backend.api import supa as _supa
+    supa_id = row["id"]
+    ext_id  = row.get("vps_id") or supa_id
+    try:
+        trades = _supa.get_live_trades(ext_id)
+        opens  = sum(1 for t in trades if t.get("action") == "open")
+        closes = sum(1 for t in trades if t.get("action") == "close")
+        if opens > closes:
+            return None   # existing open position → skip
+    except Exception:
+        pass
+
+    proxy = _FTProxy(row)
+    df    = load_mt5(proxy.symbol, proxy.timeframe, FORWARD_NBARS)
+    if df is None or len(df) < 50:
+        return None
+    pip = infer_pip_from_df(df, proxy.symbol)
+
+    from backend.engine.builder_v2.engine import GraphV2Strategy
+    strat  = GraphV2Strategy(proxy.graph)
+    setups = strat.detect(df, {"pip": pip})
+
+    last_idx = len(df) - 1
+    fresh    = [s for s in setups if int(s.get("signal_idx", -1)) == last_idx]
+    if not fresh:
+        return None
+
+    s     = fresh[-1]
+    side  = "buy" if s["direction"] == "Bull" else "sell"
+    entry = float(s["entry"])
+    sl_v  = float(s["sl"])
+    risk  = abs(entry - sl_v) or pip
+    m     = row.get("mgmt") or {}
+    tgt_r = float(m.get("target_r", 3.0))
+    tp    = entry + tgt_r * risk if side == "buy" else entry - tgt_r * risk
+    vol   = float(m.get("volume", 0.01))
+
+    return {
+        "ft_id":    ext_id,
+        "symbol":   proxy.symbol,
+        "side":     side,
+        "entry":    round(entry, 5),
+        "sl":       round(sl_v, 5),
+        "tp":       round(tp, 5),
+        "volume":   vol,
+        "bar_time": str(df["time"].iloc[-1]),
+    }
+
+
+@router.get("/live/signals")
+def live_signals(
+    x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token"),
+) -> List[Dict[str, Any]]:
+    """Server-side signal evaluation for the connector/EA.
+
+    The VPS runs the strategy and returns pending signals. Connectors don't need
+    the Python engine — just poll this endpoint, execute orders, post fills.
+    Only signals where the test has no currently-open position are returned.
+    """
+    clerk_id = _resolve_bridge_clerk_id(x_bridge_token)
+    from backend.api import supa as _supa
+    try:
+        params: Dict[str, Any] = {"status": "eq.active"}
+        if clerk_id != "__owner__":
+            params["user_id"] = f"eq.{clerk_id}"
+        rows = _supa.select("forward_tests", params)
+    except Exception:
+        rows = []
+    out = []
+    for row in rows:
+        mgmt = row.get("mgmt") or {}
+        if mgmt.get("mode", "sim") != "live_demo":
+            continue
+        try:
+            sig = _latest_signal(row)
+            if sig:
+                out.append(sig)
+        except Exception:
+            pass
+    return out
+
+
 @router.get("/live/active")
 def live_active(
     x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token"),
