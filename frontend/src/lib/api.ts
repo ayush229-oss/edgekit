@@ -255,9 +255,11 @@ export type ChartIndicator = {
 
 export type ChartPreview = {
   symbol:    string;
-  timeframe: string;
+  timeframe: string;   // strategy TF (bars were run on this)
   pip:       number;
-  bars:      ChartBar[];
+  bars:      ChartBar[];        // strategy-TF bars (used for trade idx mapping)
+  view_bars?: ChartBar[];       // optional view-TF bars (used for candle display)
+  view_tf?:   string;           // the view TF if different from timeframe
   trades:    ChartTrade[];
   n_setups:  number;
   indicators?: ChartIndicator[];   // optional — server may omit on old builds

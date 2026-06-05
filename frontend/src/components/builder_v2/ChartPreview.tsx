@@ -285,11 +285,17 @@ export function ChartPreview({
   const TF_OPTIONS = ["M5", "M15", "M30", "H1", "H4", "D1"];
 
   // ── Fetch on open / param change ──────────────────────────────────────
+  // Strategy ALWAYS runs on the original `timeframe` prop (from builder).
+  // `localTf` is the VIEW timeframe — it only swaps the candle backdrop.
+  // Trades / markers / position boxes are timestamp-based and auto-align on any TF.
   useEffect(() => {
     if (!open || !graph || graph.nodes.length === 0) return;
     setBusy(true); setErr(null); setData(null); setSelIdx(null);
     v2ChartPreview({
-      graph, symbol, timeframe: localTf, n_bars: nBars,
+      graph, symbol,
+      timeframe: timeframe,                                      // strategy TF — never changes
+      view_tf:   localTf !== timeframe ? localTf : undefined,   // view TF — only swaps bars
+      n_bars: nBars,
       target_r:         mgmt.target_r,
       target_close_pct: mgmt.target_close_pct,
       trail_mode:       mgmt.trail_mode,
@@ -335,7 +341,11 @@ export function ChartPreview({
     });
     chartRef.current = chart;
 
-    // Candles
+    // Candles — use view_bars (different display TF) when available,
+    // otherwise fall back to strategy bars.
+    // Trades / markers / position boxes use data.bars timestamps and
+    // auto-align correctly regardless of which TF the candles are on.
+    const displayBars = data.view_bars ?? data.bars;
     const candles = chart.addSeries(CandlestickSeries, {
       upColor:         C.sage,
       downColor:       C.terra,
@@ -345,7 +355,7 @@ export function ChartPreview({
       wickDownColor:   C.terra,
     });
     candles.setData(
-      data.bars.map((b) => ({
+      displayBars.map((b) => ({
         time:  b.t as UTCTimestamp,
         open:  b.o, high: b.h, low: b.l, close: b.c,
       }))
@@ -721,27 +731,40 @@ export function ChartPreview({
                 {data.data_source.provider === "mt5" ? "● " : "⚠ "}{data.data_source.label}
               </span>
             )}
-            {/* Timeframe switcher */}
-            <div className="flex items-center gap-0.5 bg-cream rounded-lg border border-border p-0.5">
-              {TF_OPTIONS.map((tf) => (
-                <button
-                  key={tf}
-                  onClick={() => setLocalTf(tf)}
-                  disabled={busy}
-                  className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${
-                    localTf === tf
-                      ? "bg-ink text-cream shadow-sm"
-                      : "text-muted hover:text-ink"
-                  }`}
+            {/* Timeframe switcher — changes the candle view TF only.
+                Strategy always re-runs on the original TF; trades auto-align via timestamps. */}
+            <div className="flex items-center gap-1.5">
+              {localTf !== timeframe && (
+                <span
+                  title={`Strategy result is from ${timeframe} — you are viewing it on ${localTf} candles`}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-amber/50 bg-amber/20 text-amber-900 font-medium"
                 >
-                  {tf}
-                </button>
-              ))}
+                  strat: {timeframe}
+                </span>
+              )}
+              <div className="flex items-center gap-0.5 bg-cream rounded-lg border border-border p-0.5">
+                {TF_OPTIONS.map((tf) => (
+                  <button
+                    key={tf}
+                    onClick={() => setLocalTf(tf)}
+                    disabled={busy}
+                    className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${
+                      localTf === tf
+                        ? "bg-ink text-cream shadow-sm"
+                        : "text-muted hover:text-ink"
+                    }`}
+                  >
+                    {tf}
+                  </button>
+                ))}
+              </div>
             </div>
             {data && (
               <>
                 <span className="text-muted text-xs">·</span>
-                <span className="text-xs text-muted">{data.bars.length} bars</span>
+                <span className="text-xs text-muted" title={data.view_bars ? `${data.view_bars.length} view bars · ${data.bars.length} strategy bars` : `${data.bars.length} bars`}>
+                  {(data.view_bars ?? data.bars).length} bars
+                </span>
                 <span className="text-muted text-xs">·</span>
                 <span className="text-xs text-muted">{data.n_setups} setups</span>
                 <span className="text-muted text-xs">·</span>

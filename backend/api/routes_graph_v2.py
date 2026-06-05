@@ -252,6 +252,9 @@ class ChartPreviewRequest(BaseModel):
     trail_mode:       Literal["none", "candle", "atr", "pips", "swing"] = "candle"
     trail_start:      Literal["immediate", "after_target"] = "after_target"
     trail_params:     Dict[str, Any]  = Field(default_factory=lambda: {"buf_pips": 1})
+    # Optional view TF — strategy always runs on `timeframe`; if view_tf differs,
+    # bars for view_tf are also loaded and returned as `view_bars` for the chart.
+    view_tf:          Optional[str]   = None
 
 
 @router.post("/chart-preview")
@@ -379,7 +382,41 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
         # actually decided — drawn as shapes, not guessed from param keys.
         artifacts = list(getattr(getattr(strategy, "ctx", None), "trace", []) or [])
 
-        return {
+        # ── Optional view_tf bars (different display TF, same strategy result) ──
+        # If view_tf differs from timeframe, load bars for the requested view TF
+        # and return them as `view_bars`. The frontend uses view_bars for the
+        # candlestick backdrop while keeping the strategy trades/markers as-is
+        # (all positions/markers are timestamp-based, so they auto-align).
+        view_bars = None
+        view_tf = req.view_tf
+        if view_tf and view_tf != req.timeframe:
+            try:
+                _TF_MINS = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+                strat_mins = _TF_MINS.get(req.timeframe, 15)
+                vw_mins    = _TF_MINS.get(view_tf, 5)
+                view_n     = min(20000, max(100, int(req.n_bars * strat_mins / vw_mins)))
+                vdf = load_mt5(req.symbol, view_tf, view_n)
+                if vdf is not None and len(vdf) > 0:
+                    vtimes = vdf["time"].astype("datetime64[s]").astype("int64").to_numpy()
+                    vseen_max = -1
+                    view_bars = []
+                    for i in range(len(vdf)):
+                        raw_t = int(vtimes[i])
+                        if raw_t <= 0:
+                            continue
+                        t = raw_t
+                        if t <= vseen_max:
+                            t = vseen_max + 1
+                        vseen_max = t
+                        view_bars.append({
+                            "t": t,
+                            "o": float(vdf["O"].iloc[i]), "h": float(vdf["H"].iloc[i]),
+                            "l": float(vdf["L"].iloc[i]), "c": float(vdf["C"].iloc[i]),
+                        })
+            except Exception:
+                view_bars = None   # fall back to strategy bars on the frontend
+
+        resp: Dict[str, Any] = {
             "symbol":    req.symbol,
             "timeframe": req.timeframe,
             "pip":       pip,
@@ -390,6 +427,10 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
             "artifacts": artifacts,
             "data_source": data_source_of(df),
         }
+        if view_bars is not None:
+            resp["view_bars"] = view_bars
+            resp["view_tf"]   = view_tf
+        return resp
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Packing response failed: {type(e).__name__}: {e}")
