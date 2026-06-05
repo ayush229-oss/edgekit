@@ -731,33 +731,42 @@ export function ChartPreview({
                 {data.data_source.provider === "mt5" ? "● " : "⚠ "}{data.data_source.label}
               </span>
             )}
-            {/* Timeframe switcher — changes the candle view TF only.
-                Strategy always re-runs on the original TF; trades auto-align via timestamps. */}
-            <div className="flex items-center gap-1.5">
-              {localTf !== timeframe && (
-                <span
-                  title={`Strategy result is from ${timeframe} — you are viewing it on ${localTf} candles`}
-                  className="text-[10px] px-1.5 py-0.5 rounded border border-amber/50 bg-amber/20 text-amber-900 font-medium"
+            {/* View TF lever — swaps candle backdrop only; strategy result never changes.
+                Strategy TF pill acts as a reset anchor: click it to snap back. */}
+            <div className="flex items-center gap-1 bg-cream rounded-lg border border-border p-0.5">
+              {/* Strategy TF anchor — always visible; click to reset view back to strategy TF */}
+              <button
+                onClick={() => setLocalTf(timeframe)}
+                disabled={busy}
+                title={localTf === timeframe
+                  ? `Strategy runs on ${timeframe}`
+                  : `Click to reset view to strategy TF (${timeframe})`}
+                className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-all ${
+                  localTf === timeframe
+                    ? "bg-ink text-cream shadow-sm"
+                    : "bg-amber/30 text-amber-900 hover:bg-amber/50"
+                }`}
+              >
+                {timeframe}
+              </button>
+              {/* Divider */}
+              <span className="w-px h-3 bg-border mx-0.5 shrink-0" />
+              {/* View TF options — everything except the strategy TF */}
+              {TF_OPTIONS.filter(tf => tf !== timeframe).map((tf) => (
+                <button
+                  key={tf}
+                  onClick={() => setLocalTf(tf)}
+                  disabled={busy}
+                  title={`View ${timeframe} strategy trades on ${tf} candles`}
+                  className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${
+                    localTf === tf
+                      ? "bg-ink text-cream shadow-sm"
+                      : "text-muted hover:text-ink"
+                  }`}
                 >
-                  strat: {timeframe}
-                </span>
-              )}
-              <div className="flex items-center gap-0.5 bg-cream rounded-lg border border-border p-0.5">
-                {TF_OPTIONS.map((tf) => (
-                  <button
-                    key={tf}
-                    onClick={() => setLocalTf(tf)}
-                    disabled={busy}
-                    className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${
-                      localTf === tf
-                        ? "bg-ink text-cream shadow-sm"
-                        : "text-muted hover:text-ink"
-                    }`}
-                  >
-                    {tf}
-                  </button>
-                ))}
-              </div>
+                  {tf}
+                </button>
+              ))}
             </div>
             {data && (
               <>
