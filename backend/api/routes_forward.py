@@ -375,12 +375,27 @@ def forward_stop(ft_id: int) -> Dict[str, Any]:
 # ─── Executor-facing endpoints (host worker ↔ VPS) ──────────────────────────
 import os as _os
 
-def _check_executor(token: Optional[str]) -> None:
-    expected = _os.environ.get("BRIDGE_TOKEN", "").strip()
-    if not expected:
-        raise HTTPException(503, "Executor auth not configured on the server.")
-    if not token or token != expected:
-        raise HTTPException(401, "Invalid executor token.")
+def _resolve_bridge_clerk_id(token: Optional[str]) -> str:
+    """Validate a bridge token and return the owning clerk_id.
+
+    Priority:
+    1. BRIDGE_TOKEN env var  →  owner token (backwards-compat with the single-
+       machine setup).  Returns the value of OWNER_CLERK_ID env if set, else
+       the sentinel "__owner__".
+    2. Per-user token stored in Supabase profiles.bridge_token.
+    """
+    if not token:
+        raise HTTPException(401, "Missing X-Bridge-Token header.")
+    owner_token = _os.environ.get("BRIDGE_TOKEN", "").strip()
+    if owner_token and token == owner_token:
+        return _os.environ.get("OWNER_CLERK_ID", "__owner__").strip()
+    from backend.api import supa as _supa
+    if not _supa.enabled():
+        raise HTTPException(503, "Token validation unavailable (Supabase not configured).")
+    profile = _supa.get_user_by_bridge_token(token)
+    if not profile:
+        raise HTTPException(401, "Invalid bridge token.")
+    return profile.get("clerk_id", "")
 
 
 class LiveEvent(BaseModel):
@@ -399,15 +414,39 @@ class LiveEvent(BaseModel):
     comment:         str = ""
 
 
+@router.post("/bridge/token")
+def bridge_token_generate(
+    db: Session = Depends(get_db),
+    x_dev_user:    Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Generate (or regenerate) a personal bridge token for the current user.
+
+    The token lets the user's local Edgekit connector authenticate to this VPS
+    so live-demo forward tests are scoped to their account.
+    """
+    cid = _clerk_id(db, x_dev_user, authorization)
+    if not cid:
+        raise HTTPException(401, "Authentication required.")
+    from backend.api import supa as _supa
+    token = _supa.generate_bridge_token(cid)
+    if not token:
+        raise HTTPException(500, "Failed to generate token — Supabase not configured.")
+    return {"token": token, "vps_url": _os.environ.get("VPS_PUBLIC_URL", "http://165.232.178.128:8765")}
+
+
 @router.get("/live/active")
 def live_active(
-    x_executor_token: Optional[str] = Header(default=None, alias="X-Executor-Token"),
+    x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token"),
 ) -> List[Dict[str, Any]]:
-    """Active Grade-3 (live_demo) test configs for the executor."""
-    _check_executor(x_executor_token)
+    """Active live_demo test configs for the connector — scoped to the token's user."""
+    clerk_id = _resolve_bridge_clerk_id(x_bridge_token)
     from backend.api import supa as _supa
     try:
-        rows = _supa.select("forward_tests", {"status": "eq.active"})
+        params: Dict[str, Any] = {"status": "eq.active"}
+        if clerk_id != "__owner__":
+            params["user_id"] = f"eq.{clerk_id}"
+        rows = _supa.select("forward_tests", params)
     except Exception:
         rows = []
     out = []
@@ -430,13 +469,16 @@ def live_active(
 def live_event(
     ft_id: int,
     ev: LiveEvent,
-    x_executor_token: Optional[str] = Header(default=None, alias="X-Executor-Token"),
+    x_bridge_token: Optional[str] = Header(default=None, alias="X-Bridge-Token"),
 ) -> Dict[str, Any]:
     """Append a real fill to the immutable live-trade ledger."""
-    _check_executor(x_executor_token)
+    clerk_id = _resolve_bridge_clerk_id(x_bridge_token)
     supa_ft = _get_row(ft_id)
     if not supa_ft:
         raise HTTPException(404, "Forward test not found.")
+    # Ownership check — only the test's owner (or the VPS owner) may post events.
+    if clerk_id != "__owner__" and supa_ft.get("user_id") != clerk_id:
+        raise HTTPException(403, "This forward test doesn't belong to your account.")
     supa_ft_id = supa_ft["id"]
     ft_ext_id  = supa_ft.get("vps_id") or supa_ft_id
     from backend.api import supa as _supa

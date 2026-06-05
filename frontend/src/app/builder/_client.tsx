@@ -1164,13 +1164,13 @@ function BuilderInner() {
             <>
               <button
                 onClick={() => startForwardTest("sim")}
-                title="Paper forward test — recomputes on fresh bars (no real execution)"
+                title="Paper forward test — recomputes on Dukascopy bars every 5 min (no real orders)"
                 className={`${fwdMsg ? "" : "ml-auto"} text-xs px-2.5 py-0.5 rounded bg-sky-100 text-sky-900 hover:bg-sky-200 transition-colors font-medium shrink-0`}>
-                🧪 Paper
+                🧪 Forward test
               </button>
               <button
                 onClick={() => startForwardTest("live_demo")}
-                title="Live demo forward test — places real orders on your MT5 demo account to measure true spread, slippage & commission"
+                title="Live-demo test — your MT5 connector places real orders on a demo account. Set up at Resources → Connect your MT5."
                 className="text-xs px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-900 hover:bg-emerald-200 transition-colors font-medium shrink-0">
                 🔴 Live (demo)
               </button>

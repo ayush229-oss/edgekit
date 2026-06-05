@@ -35,7 +35,7 @@ POLL_SEC    = int(os.environ.get("EXECUTOR_POLL_SEC", "30"))
 EVAL_BARS   = 4000
 
 _H = {"X-Bridge-Token": TOKEN}
-_HX = {"X-Executor-Token": TOKEN}
+_HX = {"X-Bridge-Token": TOKEN}   # VPS now uses X-Bridge-Token for both bridge + executor
 
 # Per-test memory: last bar time we acted on + the ticket we currently hold.
 _state: Dict[int, Dict[str, Any]] = {}
@@ -64,6 +64,11 @@ def _vps_active() -> list:
 
 def _vps_event(ft_id: int, ev: dict) -> None:
     httpx.post(f"{VPS_URL}/forward/{ft_id}/event", headers=_HX, timeout=30, json=ev).raise_for_status()
+
+
+# Note: BRIDGE_TOKEN in the VPS .env maps to the owner's account.
+# Per-user tokens are stored in Supabase profiles.bridge_token.
+# Set OWNER_CLERK_ID in VPS .env to scope the owner's token to their user_id.
 
 
 def _realized_profit(ticket: int) -> float:

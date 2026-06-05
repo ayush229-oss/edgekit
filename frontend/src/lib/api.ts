@@ -524,3 +524,9 @@ export async function forwardStop(id: number): Promise<ForwardTest> {
   if (!r.ok) throw new Error(`forward stop: ${r.status}`);
   return r.json();
 }
+
+export async function forwardGenerateBridgeToken(): Promise<{ token: string; vps_url: string }> {
+  const r = await efetch(`${API_URL}/forward/bridge/token`, { method: "POST" });
+  if (!r.ok) throw new Error(`generate bridge token: ${r.status}`);
+  return r.json();
+}

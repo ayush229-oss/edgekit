@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { forwardGenerateBridgeToken } from "@/lib/api";
 
 export default function ResourcesPage() {
   return (
@@ -15,7 +16,7 @@ export default function ResourcesPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <AISection />
-        <BrokerSection />
+        <MT5ConnectorSection />
         <PineSection />
         <TradeLogSection />
       </div>
@@ -179,215 +180,132 @@ function AISection() {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   DATA SOURCE — backed by Supabase
+   MT5 CONNECTOR
    ───────────────────────────────────────────────────────────────────────────── */
 
-type FieldType = "text" | "password" | "url";
-type Field  = { key: string; label: string; type: FieldType; placeholder: string; sensitive?: boolean };
-type Source = {
-  id: string; label: string; category: "Terminal" | "Cloud / API" | "Manual" | "Webhook";
-  fields: Field[]; helper?: string; popular?: boolean;
-};
+function MT5ConnectorSection() {
+  const [token,       setToken]     = useState<string | null>(null);
+  const [vpsUrl,      setVpsUrl]    = useState("http://165.232.178.128:8765");
+  const [generating,  setGenerating] = useState(false);
+  const [copied,      setCopied]    = useState(false);
+  const [error,       setError]     = useState<string | null>(null);
 
-const SOURCES: Source[] = [
-  { id: "mt5",         label: "MetaTrader 5",          category: "Terminal",   popular: true,
-    fields: [{ key: "host", label: "Host", type: "text", placeholder: "127.0.0.1" }, { key: "port", label: "Port", type: "text", placeholder: "8765" }],
-    helper: "Requires the Edgekit EA running inside MT5." },
-  { id: "mt4",         label: "MetaTrader 4",          category: "Terminal",   popular: true,
-    fields: [{ key: "host", label: "Host", type: "text", placeholder: "127.0.0.1" }, { key: "port", label: "Port", type: "text", placeholder: "8766" }],
-    helper: "Requires the Edgekit EA running inside MT4." },
-  { id: "ibkr",        label: "Interactive Brokers",   category: "Terminal",   popular: true,
-    fields: [{ key: "host", label: "TWS host", type: "text", placeholder: "127.0.0.1" }, { key: "port", label: "TWS port", type: "text", placeholder: "7497" }],
-    helper: "Requires TWS or IB Gateway with API enabled." },
-  { id: "binance",     label: "Binance",               category: "Cloud / API", popular: true,
-    fields: [{ key: "key", label: "API Key", type: "password", placeholder: "...", sensitive: true }, { key: "secret", label: "API Secret", type: "password", placeholder: "...", sensitive: true }],
-    helper: "Read-only key is enough for backtesting." },
-  { id: "bybit",       label: "Bybit",                 category: "Cloud / API",
-    fields: [{ key: "key", label: "API Key", type: "password", placeholder: "...", sensitive: true }, { key: "secret", label: "API Secret", type: "password", placeholder: "...", sensitive: true }] },
-  { id: "zerodha",     label: "Zerodha (Kite)",        category: "Cloud / API",
-    fields: [{ key: "api_key", label: "API Key", type: "password", placeholder: "...", sensitive: true }, { key: "access_token", label: "Access Token", type: "password", placeholder: "...", sensitive: true }],
-    helper: "From your Kite Connect developer console." },
-  { id: "alpaca",      label: "Alpaca",                category: "Cloud / API",
-    fields: [{ key: "key", label: "API Key", type: "password", placeholder: "PK...", sensitive: true }, { key: "secret", label: "API Secret", type: "password", placeholder: "...", sensitive: true }] },
-  { id: "csv",         label: "CSV upload",            category: "Manual",    popular: true,
-    fields: [], helper: "Drop any OHLCV CSV. Works with exports from MT4/MT5, TradingView, Binance." },
-  { id: "tradingview", label: "TradingView webhook",   category: "Webhook",
-    fields: [{ key: "url", label: "Webhook URL", type: "url", placeholder: "https://hooks.edgekit.app/u/..." }],
-    helper: "Paste the URL into your TradingView alert." },
-  { id: "custom",      label: "Custom REST / WebSocket", category: "Webhook",
-    fields: [{ key: "url", label: "Base URL", type: "url", placeholder: "https://..." }, { key: "key", label: "Auth token (optional)", type: "password", placeholder: "...", sensitive: true }],
-    helper: "Any feed returning OHLCV JSON." },
-];
-
-type SavedConnection = { id: string; source_id: string; label: string | null; config: Record<string, string>; is_active: boolean };
-
-function BrokerSection() {
-  const [sourceId,  setSourceId]  = useState("mt5");
-  const [vals,      setVals]      = useState<Record<string, string>>({});
-  const [saved,     setSaved]     = useState<SavedConnection[]>([]);
-  const [testing,   setTesting]   = useState(false);
-  const [saving,    setSaving]    = useState(false);
-  const [testResult, setTestResult] = useState<{ connected: boolean; note?: string; error?: string } | null>(null);
-
-  const s = SOURCES.find((x) => x.id === sourceId)!;
-
-  // Load existing connections on mount
-  useEffect(() => {
-    fetch("/api/broker-connections")
-      .then((r) => r.json())
-      .then((d) => setSaved(Array.isArray(d) ? d : []))
-      .catch(() => {});
-  }, []);
-
-  const activeConn = saved.find((c) => c.source_id === sourceId);
-
-  function set(k: string, v: string) { setVals((p) => ({ ...p, [k]: v })); setTestResult(null); }
-
-  async function handleTest() {
-    setTesting(true); setTestResult(null);
-    const nonSensitive = Object.fromEntries(
-      s.fields.filter((f) => !f.sensitive).map((f) => [f.key, vals[f.key] ?? ""])
-    );
+  async function generate() {
+    setGenerating(true); setError(null);
     try {
-      const res = await fetch("/api/broker-connections/test", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_id: sourceId, config: nonSensitive }),
-      });
-      const d = await res.json();
-      setTestResult(d);
-    } catch { setTestResult({ connected: false, error: "Network error" }); }
-    finally { setTesting(false); }
-  }
-
-  async function handleSave() {
-    setSaving(true);
-    const nonSensitive: Record<string, string> = {};
-    const sensitive:    Record<string, string> = {};
-    for (const f of s.fields) {
-      if (f.sensitive) sensitive[f.key] = vals[f.key] ?? "";
-      else             nonSensitive[f.key] = vals[f.key] ?? "";
-    }
-    try {
-      const res = await fetch("/api/broker-connections", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_id: sourceId, label: s.label,
-          config: nonSensitive, credentials: sensitive,
-          is_active: testResult?.connected ?? false,
-        }),
-      });
-      if (!res.ok) throw new Error("Save failed");
-      const d = await res.json();
-      setSaved((prev) => {
-        const filtered = prev.filter((c) => c.source_id !== sourceId);
-        return [d, ...filtered];
-      });
-      setTestResult((t) => t ? { ...t, connected: true } : { connected: true });
+      const d = await forwardGenerateBridgeToken();
+      setToken(d.token);
+      setVpsUrl(d.vps_url);
     } catch (e: any) {
-      setTestResult({ connected: false, error: e.message });
+      setError(e?.message ?? "Failed to generate token");
     } finally {
-      setSaving(false);
+      setGenerating(false);
     }
   }
 
-  async function handleDisconnect(id: string) {
-    await fetch(`/api/broker-connections/${id}`, { method: "DELETE" });
-    setSaved((p) => p.filter((c) => c.id !== id));
-    setTestResult(null);
+  async function copy() {
+    if (!token) return;
+    try { await navigator.clipboard.writeText(token); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { /* clipboard blocked */ }
   }
 
   return (
     <div className="card p-6 space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="font-semibold text-[16px]">📡 Data source</h2>
-          <p className="text-[12.5px] text-muted mt-1 leading-relaxed">
-            Pick whatever you use. CSV, MetaTrader, Interactive Brokers, crypto exchanges — all work.
-          </p>
-        </div>
-        {activeConn && (
-          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-up/15 text-up whitespace-nowrap shrink-0">
-            ● Connected
-          </span>
-        )}
+      <div>
+        <h2 className="font-semibold text-[16px]">🔌 Connect your MT5</h2>
+        <p className="text-[12.5px] text-muted mt-1 leading-relaxed">
+          Run live-demo forward tests using your own broker feed. A small connector
+          script runs on your Windows PC next to MetaTrader 5 and reports real fills —
+          spread, slippage &amp; commission — back to Edgekit.
+        </p>
       </div>
 
-      {/* Saved connections chips */}
-      {saved.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {saved.map((c) => (
-            <div key={c.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface2 text-[11px] text-ink border border-border">
-              <span className="text-up">●</span>
-              <span>{c.label ?? c.source_id}</span>
-              <button onClick={() => handleDisconnect(c.id)} className="text-muted hover:text-down ml-1 leading-none">×</button>
+      {/* Step 1 — token */}
+      <div className="rounded-lg border border-border bg-paper p-4 space-y-3">
+        <p className="text-[12px] font-semibold text-ink">Step 1 — Get your personal token</p>
+        <p className="text-[11.5px] text-muted">
+          One token per account. Regenerating invalidates the old one.
+        </p>
+
+        {token ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <code className="flex-1 rounded bg-surface2 border border-border px-3 py-1.5 text-[11px] font-mono text-ink break-all">
+                {token}
+              </code>
+              <button onClick={() => void copy()}
+                className="shrink-0 px-3 py-1.5 rounded border border-border text-[12px] hover:bg-surface2 transition-colors">
+                {copied ? "✓" : "Copy"}
+              </button>
             </div>
-          ))}
-        </div>
-      )}
-
-      <div className="space-y-3">
-        <label className="block">
-          <span className="text-[12px] text-muted">Source</span>
-          <select
-            value={sourceId}
-            onChange={(e) => { setSourceId(e.target.value); setVals({}); setTestResult(null); }}
-            className="w-full mt-1 rounded-lg bg-paper border border-border px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-money"
-          >
-            {(["Terminal", "Cloud / API", "Manual", "Webhook"] as const).map((cat) => (
-              <optgroup key={cat} label={cat}>
-                {SOURCES.filter((x) => x.category === cat).map((x) => (
-                  <option key={x.id} value={x.id}>{x.label}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
-
-        {s.fields.length > 0 && (
-          <div className={`grid gap-2 ${s.fields.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
-            {s.fields.map((f) => (
-              <label key={f.key} className="block">
-                <span className="text-[12px] text-muted">{f.label}</span>
-                <input
-                  type={f.type === "password" ? "password" : "text"}
-                  value={vals[f.key] ?? ""}
-                  onChange={(e) => set(f.key, e.target.value)}
-                  placeholder={f.placeholder}
-                  className="w-full mt-1 rounded-lg bg-paper border border-border px-3 py-2 text-[13px] font-mono focus:outline-none focus:ring-1 focus:ring-money"
-                />
-              </label>
-            ))}
+            <p className="text-[11px] text-amber-700">Keep this private — it authenticates your MT5 to Edgekit.</p>
           </div>
-        )}
-
-        {s.id === "csv" ? (
-          <label className="block">
-            <input type="file" accept=".csv"
-              className="block w-full text-[12px] text-muted file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:text-[12px] file:font-medium file:bg-surface2 file:text-ink hover:file:bg-border cursor-pointer" />
-          </label>
         ) : (
-          <div className="flex gap-2">
-            <button onClick={handleTest} disabled={testing}
-              className="flex-1 py-2 rounded-lg border border-border text-[13px] font-medium hover:bg-surface2 transition-colors disabled:opacity-60">
-              {testing ? "Testing…" : "Test connection"}
-            </button>
-            <button onClick={handleSave} disabled={saving}
-              className="flex-1 py-2 rounded-lg bg-money text-white text-[13px] font-medium hover:bg-moneyDark transition-colors disabled:opacity-60">
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </div>
+          <button onClick={() => void generate()} disabled={generating}
+            className="w-full py-2 rounded-lg bg-money text-white text-[13px] font-medium hover:bg-moneyDark transition-colors disabled:opacity-50">
+            {generating ? "Generating…" : "Generate token"}
+          </button>
         )}
 
-        {testResult && (
-          <p className={`text-[11px] font-medium ${testResult.connected ? "text-up" : "text-down"}`}>
-            {testResult.connected
-              ? `✓ ${testResult.note ?? "Connected successfully"}`
-              : `✗ ${testResult.error ?? "Connection failed"}`}
-          </p>
-        )}
+        {error && <p className="text-[11px] text-down">{error}</p>}
 
-        {s.helper && <p className="text-[11px] text-muted">{s.helper}</p>}
+        {token && (
+          <button onClick={() => void generate()} disabled={generating}
+            className="text-[11px] text-muted hover:text-ink underline">
+            {generating ? "Regenerating…" : "Regenerate (invalidates old token)"}
+          </button>
+        )}
       </div>
+
+      {/* Step 2 — install */}
+      <div className="rounded-lg border border-border bg-paper p-4 space-y-2">
+        <p className="text-[12px] font-semibold text-ink">Step 2 — Install on your Windows PC</p>
+        <ol className="text-[11.5px] text-muted list-decimal list-inside space-y-1.5">
+          <li>
+            Clone the repo:{" "}
+            <code className="bg-surface2 px-1 py-0.5 rounded text-[10.5px]">
+              git clone https://github.com/ayush229/edgekit.git
+            </code>
+          </li>
+          <li>
+            Install deps:{" "}
+            <code className="bg-surface2 px-1 py-0.5 rounded text-[10.5px]">
+              pip install MetaTrader5 httpx pandas numpy
+            </code>
+          </li>
+          <li>MT5 must be <strong className="text-ink">logged into a DEMO account</strong> and running.</li>
+        </ol>
+      </div>
+
+      {/* Step 3 — run */}
+      <div className="rounded-lg border border-border bg-paper p-4 space-y-2">
+        <p className="text-[12px] font-semibold text-ink">Step 3 — Run the connector</p>
+        <div className="space-y-1.5 text-[11.5px]">
+          <p className="text-muted">In a CMD window inside the cloned repo:</p>
+          <pre className="bg-surface2 rounded px-3 py-2 text-[10.5px] font-mono text-ink overflow-x-auto whitespace-pre-wrap break-all">
+{`set EDGEKIT_TOKEN=${token ?? "<your-token>"}
+set EDGEKIT_VPS=${vpsUrl}
+python -m bridge.connector`}
+          </pre>
+          <p className="text-muted text-[11px]">Leave this window open. It polls every 30 s for new signals.</p>
+        </div>
+      </div>
+
+      {/* Step 4 — start a live test */}
+      <div className="rounded-lg border border-border bg-paper p-4 space-y-2">
+        <p className="text-[12px] font-semibold text-ink">Step 4 — Start a live-demo forward test</p>
+        <p className="text-[11.5px] text-muted">
+          Go to the <a href="/builder" className="text-money hover:underline">Builder</a>,
+          build a strategy, run a backtest — then click{" "}
+          <strong className="text-ink">🔴 Live (demo)</strong> to start a live forward test.
+          The connector will place orders automatically.
+        </p>
+      </div>
+
+      <p className="text-[11px] text-muted leading-relaxed">
+        The connector only ever touches your MT5 DEMO account and only positions it opened itself
+        (tagged with magic number 770011). Real-account trading is blocked in code.
+      </p>
     </div>
   );
 }

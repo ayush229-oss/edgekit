@@ -163,6 +163,33 @@ def get_live_trades(ft_vps_id: int) -> list[dict]:
     return select("live_trades", {"ft_vps_id": f"eq.{ft_vps_id}", "order": "ts.asc"})
 
 
+# ── Bridge-token helpers ─────────────────────────────────────────────────────
+
+def generate_bridge_token(clerk_id: str) -> Optional[str]:
+    """Generate a fresh bridge token for a user; upsert into profiles.bridge_token."""
+    if not enabled():
+        return None
+    import secrets as _sec
+    tok = "ek-bridge-" + _sec.token_urlsafe(32)
+    try:
+        upsert("profiles", {"clerk_id": clerk_id, "bridge_token": tok},
+               on_conflict="clerk_id")
+        return tok
+    except Exception:
+        return None
+
+
+def get_user_by_bridge_token(token: str) -> Optional[dict]:
+    """Return a profiles row whose bridge_token matches, or None."""
+    if not enabled() or not token:
+        return None
+    try:
+        rows = select("profiles", {"bridge_token": f"eq.{token}"})
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def log_live_trade(*, vps_id: int, ft_vps_id: int, ts, action, symbol, side,
                    volume, requested_price, fill_price, slippage, spread,
                    sl, tp, ticket, profit, comment) -> None:
