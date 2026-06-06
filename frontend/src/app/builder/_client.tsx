@@ -28,7 +28,7 @@ import nextDynamic from "next/dynamic";
 import ReactFlow, {
   Background, Controls, MiniMap,
   applyNodeChanges, applyEdgeChanges, addEdge,
-  ReactFlowProvider,
+  ReactFlowProvider, useReactFlow,
   type Node, type Edge, type NodeChange, type EdgeChange, type Connection,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -128,19 +128,24 @@ function rfToGraph(
   name: string,
   userDefs?: Record<string, UserNodeDef>,
 ): V2Graph {
-  const presentTypes = new Set(nodes.map((n) => (n.data as any).spec?.type ?? ""));
+  // Skip nodes toggled off via double-click
+  const activeNodes = nodes.filter((n) => !(n.data as any).disabled);
+  const activeIds   = new Set(activeNodes.map((n) => n.id));
+  const activeEdges = edges.filter((e) => activeIds.has(e.source!) && activeIds.has(e.target!));
+
+  const presentTypes = new Set(activeNodes.map((n) => (n.data as any).spec?.type ?? ""));
   const user_defs = userDefs
     ? Object.values(userDefs).filter((d) => presentTypes.has(d.type))
     : [];
   return {
     name,
-    nodes: nodes.map((n) => ({
+    nodes: activeNodes.map((n) => ({
       id:       n.id,
       type:     (n.data as any).spec.type,
       params:   (n.data as any).params,
       position: n.position,
     })),
-    edges: edges.map((e) => ({
+    edges: activeEdges.map((e) => ({
       from:      e.source!,
       to:        e.target!,
       from_port: e.sourceHandle ?? "",
@@ -177,8 +182,14 @@ function BuilderInner() {
   const [moreOpen,   setMoreOpen]   = useState(false);   // ⋯ overflow menu
   const [stashedNodes, setStashedNodes] = useState<{ node: Node; edges: Edge[] }[]>([]);  // disabled variables
   const [fwdMsg,     setFwdMsg]     = useState<string | null>(null);   // forward-test feedback
-  const [logicHidden, setLogicHidden] = useState(true);
-  const [resultsMin, setResultsMin] = useState(true);
+  const [logicHidden,      setLogicHidden]      = useState(true);
+  const [resultsMin,       setResultsMin]       = useState(true);
+  const [resultsHeight,    setResultsHeight]    = useState(300);
+  const [tradeHistoryOpen, setTradeHistoryOpen] = useState(false);
+  const [dateMode,    setDateMode]    = useState(false);
+  const [startDate,   setStartDate]   = useState("");
+  const [endDate,     setEndDate]     = useState("");
+  const resultsDragRef = useRef<{ startY: number; startH: number } | null>(null);
 
   // ── Save state ─────────────────────────────────────────────────────────
   const [saveResultOpen,   setSaveResultOpen]   = useState(false);
@@ -305,7 +316,7 @@ function BuilderInner() {
   }, [nodes, edges]);     // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Mark stale on any change that affects results ──────────────────────
-  useEffect(() => { setStale(true); }, [nodes, edges, tf, bars, symbol, mgmt]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setStale(true); }, [nodes, edges, tf, bars, symbol, mgmt, dateMode, startDate, endDate]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Port-type lookup for the connection validator
   const portTypeMap = useMemo(() => {
@@ -476,6 +487,13 @@ function BuilderInner() {
     setSelectedId(null);
   }
 
+  // ── Double-click to toggle a node on/off without removing it ─────────────
+  function toggleNodeDisabled(id: string) {
+    setNodes((ns) => ns.map((n) =>
+      n.id === id ? { ...n, data: { ...n.data, disabled: !(n.data as any).disabled } } : n
+    ));
+  }
+
   // ── Variables (nodes) enable/disable — toggle a variable off and on ──────
   // Disabling stashes the node + its wires so the strategy can be put back
   // exactly; the graph realigns (edges drop) and the backtest reflects it.
@@ -597,6 +615,8 @@ function BuilderInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedId, nodes]);    // eslint-disable-line react-hooks/exhaustive-deps
 
+  const { fitView } = useReactFlow();
+
   const selectedNode = useMemo(() => nodes.find((n) => n.id === selectedId), [nodes, selectedId]);
   const selectedSpec = (selectedNode?.data as any)?.spec as V2NodeSpec | null ?? null;
 
@@ -689,6 +709,8 @@ function BuilderInner() {
         symbol:           symbol,
         timeframe:        tf,
         n_bars:           bars,
+        ...(dateMode && startDate ? { start_date: startDate } : {}),
+        ...(dateMode && endDate   ? { end_date:   endDate   } : {}),
         target_r:         mgmt.target_r,
         target_close_pct: mgmt.target_close_pct,
         trail_mode:       mgmt.trail_mode,
@@ -938,10 +960,31 @@ function BuilderInner() {
             className="text-xs rounded bg-cream border border-border px-1.5 py-1">
             {["M1","M5","M15","M30","H1","H4","D1"].map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-          <input type="number" value={bars} min={500} max={20000} step={500}
-            onChange={(e) => setBars(parseInt(e.target.value || "5000"))}
-            title="Number of bars to backtest"
-            className="text-xs rounded bg-cream border border-border px-2 py-1 w-[68px]" />
+          <button
+            onClick={() => setDateMode((v) => !v)}
+            title={dateMode ? "Switch to bars mode" : "Switch to date range mode"}
+            className={`text-xs px-1.5 py-1 rounded border transition-colors ${
+              dateMode ? "border-sage/60 bg-sage/15 text-sage" : "border-border text-muted hover:bg-cream"
+            }`}
+          >
+            {dateMode ? "Date" : "Bars"}
+          </button>
+          {dateMode ? (
+            <>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                title="Start date"
+                className="text-xs rounded bg-cream border border-border px-1.5 py-1 w-[118px] focus:outline-none focus:ring-1 focus:ring-sage" />
+              <span className="text-muted text-xs">→</span>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
+                title="End date"
+                className="text-xs rounded bg-cream border border-border px-1.5 py-1 w-[118px] focus:outline-none focus:ring-1 focus:ring-sage" />
+            </>
+          ) : (
+            <input type="number" value={bars} min={500} max={20000} step={500}
+              onChange={(e) => setBars(parseInt(e.target.value || "5000"))}
+              title="Number of bars to backtest"
+              className="text-xs rounded bg-cream border border-border px-2 py-1 w-[68px]" />
+          )}
           <ComplexityMeter c={complex} />
         </div>
 
@@ -1060,10 +1103,10 @@ function BuilderInner() {
           )}
         </div>
 
-        {/* ✨ Describe strategy — hero AI feature, always visible */}
+        {/* ✨ SOROS — AI strategy builder, always visible */}
         <button onClick={() => setDescOpen(true)}
           className="text-xs px-3 py-1.5 rounded-lg bg-amber/30 border border-amber/40 text-amber-900 hover:bg-amber/45 transition-colors font-medium shrink-0">
-          ✨ Describe
+          ✨ SOROS
         </button>
 
         {/* ▶ Run backtest — primary CTA */}
@@ -1082,8 +1125,6 @@ function BuilderInner() {
         <PaletteV2
           library={library}
           onAdd={addNodeFromPalette}
-          onAddCustomNode={addCustomNode}
-          onOpenCustomNodeBuilder={() => setCustomNodeOpen(true)}
           onAddUserNode={addUserNode}
           onOpenUserNodeBuilder={() => setUserNodeOpen(true)}
           minimized={paletteMin}
@@ -1099,6 +1140,13 @@ function BuilderInner() {
               className={`w-9 h-9 rounded-full border shadow-sm flex items-center justify-center text-lg transition-colors
                 ${guideOn ? "bg-amber/30 border-amber/50" : "bg-cream2 border-border hover:bg-cream"}`}>
               💡
+            </button>
+            <button
+              onClick={() => fitView({ padding: 0.15, duration: 300 })}
+              title="Fit all nodes in view (reset view)"
+              className="w-9 h-9 rounded-full border border-border shadow-sm bg-cream2 hover:bg-cream flex items-center justify-center text-base transition-colors"
+            >
+              ⊞
             </button>
           </div>
 
@@ -1128,6 +1176,7 @@ function BuilderInner() {
             onConnect={onConnect}
             isValidConnection={isValidConnection}
             onNodeClick={(_, n) => setSelectedId(n.id)}
+            onNodeDoubleClick={(_, n) => toggleNodeDisabled(n.id)}
             onPaneClick={() => setSelectedId(null)}
             fitView fitViewOptions={{ padding: 0.15 }}
             className="!bg-cream" proOptions={{ hideAttribution: true }}
@@ -1249,8 +1298,28 @@ function BuilderInner() {
           )}
         </div>
       ) : (
-        // Expanded: full panel
-        <div className="border-t border-border bg-cream2 shrink-0 max-h-[42%] overflow-y-auto relative">
+        // Expanded: resizable panel
+        <div
+          className="border-t border-border bg-cream2 shrink-0 overflow-y-auto relative"
+          style={{ height: resultsHeight }}
+        >
+          {/* Drag-to-resize handle at the very top */}
+          <div
+            className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-20 group"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              resultsDragRef.current = { startY: e.clientY, startH: resultsHeight };
+            }}
+            onPointerMove={(e) => {
+              if (!resultsDragRef.current) return;
+              const delta = resultsDragRef.current.startY - e.clientY;
+              const next  = Math.max(120, Math.min(window.innerHeight * 0.75, resultsDragRef.current.startH + delta));
+              setResultsHeight(next);
+            }}
+            onPointerUp={() => { resultsDragRef.current = null; }}
+          >
+            <div className="mx-auto mt-0.5 w-12 h-1 rounded-full bg-border group-hover:bg-sage/50 transition-colors" />
+          </div>
           {/* Collapse button — top-right corner */}
           <button onClick={() => setResultsMin(true)}
             title="Minimize results panel"

@@ -1050,6 +1050,128 @@ MODE 1 output format (when asking questions):
 CRITICAL: Output ONLY valid JSON matching one of the two formats above. No markdown. No prose outside the JSON."""
 
 
+_NODE_CHAT_SYSTEM = """You are Edgekit's node design assistant. Help traders create a single custom node through conversation.
+
+A node is ONE building block (not a full strategy). Lanes:
+  indicator — computes a value or series from price data (e.g. custom moving average)
+  alpha     — generates Bull/Bear signals (e.g. "go long when X crosses Y")
+  filter    — passes or blocks an incoming signal (e.g. "only during London hours")
+  sizing    — returns a risk fraction (e.g. "risk 1% scaled by volatility")
+  risk      — returns a stop-loss distance in pips
+  exit      — returns a target R multiple
+
+You have two modes:
+
+MODE 1 — CLARIFY (need more details):
+Ask ONE clear, focused question per turn. Typical questions:
+  - Is this meant to output a value (indicator) or generate signals (alpha)?
+  - What parameters should be adjustable? (period, threshold, etc.)
+  - What is the exact formula or condition?
+Keep questions short and plain — no jargon.
+
+MODE 2 — BUILD (you have enough to define the node):
+Output ONLY this JSON, nothing else:
+{"type":"node_def","def":{...}}
+
+Node def schema:
+{
+  "label": string,
+  "description": string (one sentence),
+  "lane": "indicator"|"alpha"|"filter"|"sizing"|"risk"|"exit",
+  "outputs": [{"name":string,"type":"series"|"number"}],  // indicator ONLY
+  "extra_inputs": [],
+  "params_spec": [{"key":string,"label":string,"type":"int"|"float","default":number,"min":number,"max":number}],
+  "formulas": {
+    // indicator: one key per output name → numpy/pandas expression returning scalar or array
+    // all others: single key "main" → expression for the lane
+  }
+}
+
+Formula rules:
+- Variables: open, high, low, close, volume (np.ndarray), i (bar index), pip (float)
+- Modules: np (numpy), pd (pandas)
+- Params available by name (e.g. period)
+- Single expression only — no assignments, no imports
+
+MODE 1 format: {"type":"message","content":"your question here"}
+CRITICAL: Output ONLY valid JSON. No markdown fences. No prose outside the JSON."""
+
+
+class NodeChatRequest(BaseModel):
+    messages: List[Dict[str, str]]
+
+
+@router.post("/node-chat")
+def node_chat(
+    req:           NodeChatRequest,
+    request:       Request,
+    x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
+    x_ai_model:    Optional[str] = Header(None, alias="X-AI-Model"),
+) -> Dict[str, Any]:
+    """
+    Multi-turn node design assistant.
+    Returns {"type":"message","content":"..."} for clarifying questions
+    or {"type":"node_def","def":{...}} when ready to build.
+    """
+    import os, json as _json
+
+    user_supplied = bool((x_ai_key or "").strip() or (x_gemini_key or "").strip())
+    provider = (x_ai_provider or _DEFAULT_PROVIDER).strip().lower()
+    api_key  = (x_ai_key or "").strip()
+    if not api_key and x_gemini_key:
+        api_key = x_gemini_key.strip(); provider = "gemini"
+    if not api_key:
+        if not x_ai_provider: provider = _DEFAULT_PROVIDER
+        api_key = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
+    if not api_key:
+        raise HTTPException(503, "AI key required. Add yours under Resources → AI Model.")
+    if not user_supplied:
+        from backend.api.limits import enforce_ai_quota
+        enforce_ai_quota(request.client.host if request.client else "anon")
+
+    history = [{"role": m["role"], "content": m["content"]} for m in req.messages]
+    model   = (x_ai_model or "").strip() or None
+
+    try:
+        raw = _call_chat(provider, api_key, _NODE_CHAT_SYSTEM, history, model=model)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _normalize_api_error(provider, str(e))
+
+    result = _parse_model_json(raw)
+    if result is None:
+        return {"type": "message", "content": raw.strip() or "Tell me more about what this node should do."}
+
+    if result.get("type") == "node_def":
+        def_data = result.get("def")
+        if not isinstance(def_data, dict):
+            return {"type": "message", "content": "I had trouble generating the node. Could you describe it differently?"}
+        try:
+            _validate_node_def(def_data)
+            return {"type": "node_def", "def": def_data}
+        except Exception as e:
+            # One repair attempt
+            fix_hist = list(history) + [
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": f"The node_def failed validation: {e}. Fix it and return corrected JSON."},
+            ]
+            try:
+                raw2 = _call_chat(provider, api_key, _NODE_CHAT_SYSTEM, fix_hist, model=model)
+                r2   = _parse_model_json(raw2)
+                if r2 and r2.get("type") == "node_def":
+                    d2 = r2.get("def", {})
+                    _validate_node_def(d2)
+                    return {"type": "node_def", "def": d2}
+            except Exception:
+                pass
+            return {"type": "message", "content": "I ran into a formula issue. Let me ask a bit more to get this right."}
+
+    return {"type": "message", "content": result.get("content", raw.strip())}
+
+
 @router.post("/chat")
 def graph_chat(
     req: ChatRequest,
@@ -1498,6 +1620,9 @@ class GraphBacktestV2Request(BaseModel):
     timeframe:        str  = "M15"
     n_bars:           int  = 5000
     csv_data_id:      Optional[str] = None
+    # Date range filter (YYYY-MM-DD); takes priority over n_bars when provided
+    start_date:       Optional[str] = None
+    end_date:         Optional[str] = None
     # Execution costs
     spread_pips:      float = 0.0
     commission:       float = 0.0
@@ -1902,6 +2027,19 @@ def run_v2_backtest(
             raise HTTPException(404, f"data_id {req.csv_data_id} not found")
     else:
         raise HTTPException(400, f"Unsupported data_source: {req.data_source}")
+
+    # Apply date range filter when start_date or end_date is given
+    if req.start_date or req.end_date:
+        import pandas as pd
+        df = df.copy()
+        df["time"] = pd.to_datetime(df["time"])
+        if req.start_date:
+            df = df[df["time"] >= pd.Timestamp(req.start_date)]
+        if req.end_date:
+            df = df[df["time"] <= pd.Timestamp(req.end_date) + pd.Timedelta(days=1)]
+        df = df.reset_index(drop=True)
+        if len(df) == 0:
+            raise HTTPException(422, "No bars in the specified date range.")
 
     pip = infer_pip_from_df(df, req.symbol)
     setups = GraphV2Strategy(graph).detect(df, {"pip": pip})

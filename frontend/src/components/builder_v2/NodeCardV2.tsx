@@ -19,14 +19,15 @@ import type { V2NodeSpec } from "@/lib/api";
 import { PORT_COLORS, LANE_META, laneAccentColor } from "./portColors";
 
 export type NodeCardV2Data = {
-  spec:     V2NodeSpec;
-  params:   Record<string, any>;
-  selected: boolean;
+  spec:      V2NodeSpec;
+  params:    Record<string, any>;
+  selected:  boolean;
+  disabled?: boolean;
 };
 
 
 export function NodeCardV2({ data, selected }: NodeProps<NodeCardV2Data>) {
-  const { spec, params } = data;
+  const { spec, params, disabled } = data;
   const accent = laneAccentColor(spec.lane);
   const lane   = LANE_META[spec.lane];
 
@@ -47,14 +48,20 @@ export function NodeCardV2({ data, selected }: NodeProps<NodeCardV2Data>) {
   return (
     <div
       className={clsx(
-        "rounded-xl border-2 bg-cream2 shadow-sm transition-all min-w-[180px]",
+        "rounded-xl border-2 bg-cream2 shadow-sm transition-all min-w-[180px] relative",
         selected ? "ring-2 ring-offset-2 ring-offset-cream" : "",
+        disabled ? "opacity-40 grayscale" : "",
       )}
       style={{
         borderColor: accent,
         boxShadow:   selected ? `0 0 0 3px ${accent}55` : undefined,
       }}
     >
+      {disabled && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none rounded-xl">
+          <span className="text-[9px] uppercase tracking-widest font-bold bg-ink/80 text-cream2 px-2 py-0.5 rounded">OFF</span>
+        </div>
+      )}
       {/* Lane stripe at the top */}
       <div className="h-1.5 rounded-t-[10px]" style={{ background: accent }} />
 

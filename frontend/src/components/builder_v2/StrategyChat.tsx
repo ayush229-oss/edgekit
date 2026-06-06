@@ -1,40 +1,89 @@
 "use client";
 
-/**
- * Conversational AI strategy builder.
- *
- * Non-technical users describe their idea in plain English. The AI asks
- * clarifying questions (one at a time) until it understands the strategy,
- * then builds the graph and lets the user load it onto the canvas.
- */
 import { useEffect, useRef, useState } from "react";
 import {
   v2Chat, hasUserAIKey, getAIProvider, getAIModel, setAIModel, AI_MODEL_OPTIONS,
   type ChatMessage, type V2Graph, type GraphDecision,
 } from "@/lib/api";
 import Link from "next/link";
+import { SuggestionsPanel } from "./SuggestionsPanel";
 
-// ── Conversation persistence (kept across close/reopen + refresh) ──────────
-const CHAT_KEY = "edgekit.chat.v1";
-type SavedChat = { messages: ChatMessage[]; graph: V2Graph | null; decisions: GraphDecision[] };
+// ── Multi-chat persistence ─────────────────────────────────────────────────
+const CHATS_KEY  = "edgekit.chats.v2";
+const ACTIVE_KEY = "edgekit.chat.active";
+const LEGACY_KEY = "edgekit.chat.v1";
 
-function loadChat(): SavedChat | null {
-  if (typeof window === "undefined") return null;
+type SavedChat = {
+  id:        string;
+  name:      string;
+  createdAt: number;
+  updatedAt: number;
+  messages:  ChatMessage[];
+  graph:     V2Graph | null;
+  decisions: GraphDecision[];
+};
+
+function genId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function chatName(messages: ChatMessage[]): string {
+  const first = messages.find((m) => m.role === "user");
+  if (!first) return "New Chat";
+  const t = typeof first.content === "string" ? first.content : "New Chat";
+  return t.length > 45 ? t.slice(0, 45) + "…" : t;
+}
+
+function formatDate(ts: number): string {
+  const d   = new Date(ts);
+  const now = new Date();
+  const age = now.getTime() - d.getTime();
+  if (age < 86_400_000)         return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (age < 7 * 86_400_000)     return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function loadAllChats(): SavedChat[] {
+  if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(CHAT_KEY);
-    return raw ? (JSON.parse(raw) as SavedChat) : null;
-  } catch { return null; }
-}
-function saveChat(c: SavedChat): void {
-  if (typeof window === "undefined") return;
-  try { window.localStorage.setItem(CHAT_KEY, JSON.stringify(c)); } catch { /* ignore */ }
-}
-function clearChat(): void {
-  if (typeof window === "undefined") return;
-  try { window.localStorage.removeItem(CHAT_KEY); } catch { /* ignore */ }
+    const existing = window.localStorage.getItem(CHATS_KEY);
+    if (existing) return JSON.parse(existing) as SavedChat[];
+
+    // Migrate from legacy single-chat format
+    const legacy = window.localStorage.getItem(LEGACY_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as { messages: ChatMessage[]; graph: V2Graph | null; decisions: GraphDecision[] };
+      if (parsed?.messages?.length > 1) {
+        const migrated: SavedChat = {
+          id: genId(), name: chatName(parsed.messages),
+          createdAt: Date.now(), updatedAt: Date.now(),
+          messages: parsed.messages, graph: parsed.graph ?? null, decisions: parsed.decisions ?? [],
+        };
+        saveAllChats([migrated]);
+        window.localStorage.removeItem(LEGACY_KEY);
+        return [migrated];
+      }
+    }
+    return [];
+  } catch { return []; }
 }
 
+function saveAllChats(chats: SavedChat[]): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch {}
+}
 
+function loadActiveId(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.localStorage.getItem(ACTIVE_KEY); } catch { return null; }
+}
+
+function saveActiveId(id: string): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(ACTIVE_KEY, id); } catch {}
+}
+
+// ── Starters ───────────────────────────────────────────────────────────────
 const STARTER_PROMPTS = [
   "EMA 20 crosses above EMA 50 — buy, ATR stop, trail behind candles",
   "RSI drops below 30 and bounces — buy, stop below swing low, 2R target",
@@ -44,40 +93,54 @@ const STARTER_PROMPTS = [
   "MACD crossover above zero — buy, fixed 30-pip stop, 3R trail",
 ];
 
+// ── Component ──────────────────────────────────────────────────────────────
 export function StrategyChat({
   open,
   onClose,
   onLoadGraph,
-  symbol = "XAUUSD",
-  timeframe = "M15",
-  currentGraph = null,
+  symbol        = "XAUUSD",
+  timeframe     = "M15",
+  currentGraph  = null,
   resultSummary = null,
 }: {
-  open:        boolean;
-  onClose:     () => void;
-  onLoadGraph: (g: V2Graph, name: string) => void;
-  symbol?:     string;
-  timeframe?:  string;
-  /** When set, the chat edits this existing strategy instead of starting fresh. */
+  open:          boolean;
+  onClose:       () => void;
+  onLoadGraph:   (g: V2Graph, name: string) => void;
+  symbol?:       string;
+  timeframe?:    string;
   currentGraph?:  V2Graph | null;
-  /** Short summary of the strategy's last backtest, e.g. "0 trades". */
   resultSummary?: string | null;
 }) {
-  const editing = !!(currentGraph && currentGraph.nodes && currentGraph.nodes.length > 0);
-  const [messages,  setMessages]  = useState<ChatMessage[]>([]);
-  const [input,     setInput]     = useState("");
-  const [busy,      setBusy]      = useState(false);
-  const [graph,     setGraph]     = useState<V2Graph | null>(null);
-  const [decisions, setDecisions] = useState<GraphDecision[]>([]);
-  const [err,       setErr]       = useState<string | null>(null);
-  const [hasKey,    setHasKey]    = useState(false);
-  const [provider,  setProvider]  = useState("gemini");
-  const [model,     setModel]     = useState("");
-  const [image,     setImage]     = useState<string | null>(null);  // data URL for this turn
+  const editing = !!(currentGraph?.nodes?.length);
+
+  const [allChats,    setAllChats]    = useState<SavedChat[]>([]);
+  const [activeId,    setActiveId]    = useState<string | null>(null);
+  const [messages,    setMessages]    = useState<ChatMessage[]>([]);
+  const [input,       setInput]       = useState("");
+  const [busy,        setBusy]        = useState(false);
+  const [graph,       setGraph]       = useState<V2Graph | null>(null);
+  const [decisions,   setDecisions]   = useState<GraphDecision[]>([]);
+  const [err,         setErr]         = useState<string | null>(null);
+  const [hasKey,      setHasKey]      = useState(false);
+  const [provider,    setProvider]    = useState("gemini");
+  const [model,       setModel]       = useState("");
+  const [image,       setImage]       = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(true);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
 
-  // Read a dropped/pasted/selected image File into a base64 data URL.
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  function greeting(): ChatMessage {
+    return {
+      role: "assistant",
+      content: editing
+        ? `I'm SOROS. I can see your current strategy${resultSummary ? ` (last backtest: ${resultSummary})` : ""}. Tell me what to change — e.g. "loosen it so it actually trades", "remove the AND condition", or "add a trend filter" — and I'll update it.`
+        : "I'm SOROS, your AI strategy builder. Tell me your trading idea in plain English — no jargon needed. For example: \"Buy gold when it breaks above a recent high, sell when it drops back below.\" What's your idea?",
+    };
+  }
+
   function readImage(file: File | null | undefined) {
     if (!file || !file.type.startsWith("image/")) return;
     if (file.size > 5 * 1024 * 1024) { setErr("Reference image too large (max 5 MB)."); return; }
@@ -86,33 +149,55 @@ export function StrategyChat({
     reader.readAsDataURL(file);
   }
 
-  function greeting(): ChatMessage {
-    return {
-      role: "assistant",
-      content: editing
-        ? `I can see your current strategy${resultSummary ? ` (last backtest: ${resultSummary})` : ""}. Tell me what to change — e.g. "loosen it so it actually trades", "remove the AND condition", or "add a trend filter" — and I'll update it.`
-        : "Hey! Tell me about your trading idea in plain English — no jargon needed. For example: \"I want to buy gold when it breaks above a recent high and sell when it drops back below.\" What's your idea?",
-    };
+  function persistCurrent(
+    msgs: ChatMessage[], g: V2Graph | null, dec: GraphDecision[],
+    id: string | null, chats: SavedChat[]
+  ): SavedChat[] {
+    if (!id || msgs.length === 0) return chats;
+    const updated = chats.map((c) =>
+      c.id === id
+        ? { ...c, messages: msgs, graph: g, decisions: dec, updatedAt: Date.now(), name: chatName(msgs) }
+        : c
+    );
+    saveAllChats(updated);
+    return updated;
   }
 
+  // ── Init on open ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!open) return;
     setHasKey(hasUserAIKey());
     setProvider(getAIProvider());
     setModel(getAIModel());
-    // Restore the previous conversation (kept across close/reopen so the user
-    // can iterate mid-backtest without losing context). Falls back to a greeting.
+
+    const chats = loadAllChats();
+    setAllChats(chats);
+
+    // Only initialize conversation state on first open (state is preserved across close/reopen).
     if (messages.length === 0) {
-      const saved = loadChat();
-      if (saved && saved.messages?.length) {
-        setMessages(saved.messages);
-        if (saved.graph)     setGraph(saved.graph);
-        if (saved.decisions) setDecisions(saved.decisions);
+      const savedId = loadActiveId();
+      const active  = chats.find((c) => c.id === savedId) ?? chats[chats.length - 1] ?? null;
+
+      if (active) {
+        setActiveId(active.id);
+        setMessages(active.messages);
+        setGraph(active.graph);
+        setDecisions(active.decisions);
       } else {
+        const newId = genId();
+        const nc: SavedChat = {
+          id: newId, name: "New Chat",
+          createdAt: Date.now(), updatedAt: Date.now(),
+          messages: [greeting()], graph: null, decisions: [],
+        };
+        saveAllChats([nc]);
+        saveActiveId(newId);
+        setAllChats([nc]);
+        setActiveId(newId);
         setMessages([greeting()]);
       }
     }
-    // Focus the input on open.
+
     setTimeout(() => inputRef.current?.focus(), 50);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -120,32 +205,92 @@ export function StrategyChat({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Persist the conversation so it survives close/reopen + refresh.
+  // Persist to localStorage whenever conversation changes.
   useEffect(() => {
-    if (!open) return;
-    if (messages.length === 0) return;
-    saveChat({ messages, graph, decisions });
-  }, [messages, graph, decisions, open]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!open || messages.length === 0) return;
+    setAllChats((prev) => persistCurrent(messages, graph, decisions, activeId, prev));
+  }, [messages, graph, decisions]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-focus the textbox whenever the AI finishes responding.
   useEffect(() => {
     if (open && !busy) inputRef.current?.focus();
   }, [busy, open]);
 
+  // ── Chat management ───────────────────────────────────────────────────────
+
   function newChat() {
+    const saved = persistCurrent(messages, graph, decisions, activeId, allChats);
+    const newId = genId();
+    const nc: SavedChat = {
+      id: newId, name: "New Chat",
+      createdAt: Date.now(), updatedAt: Date.now(),
+      messages: [greeting()], graph: null, decisions: [],
+    };
+    const next = [nc, ...saved];
+    saveAllChats(next);
+    saveActiveId(newId);
+    setAllChats(next);
+    setActiveId(newId);
     setMessages([greeting()]);
     setInput("");
     setGraph(null);
     setDecisions([]);
     setErr(null);
-    clearChat();
     setTimeout(() => inputRef.current?.focus(), 50);
   }
 
-  function close() {
-    // Keep the conversation (persisted) — just close. Use "New chat" to clear.
-    onClose();
+  function switchChat(id: string) {
+    if (id === activeId) { setShowHistory(false); return; }
+    const saved  = persistCurrent(messages, graph, decisions, activeId, allChats);
+    const target = saved.find((c) => c.id === id);
+    if (!target) return;
+    saveActiveId(id);
+    setAllChats(saved);
+    setActiveId(id);
+    setMessages(target.messages);
+    setGraph(target.graph);
+    setDecisions(target.decisions);
+    setErr(null);
+    setInput("");
+    setShowHistory(false);
+    setTimeout(() => inputRef.current?.focus(), 50);
   }
+
+  function deleteChat(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    const remaining = allChats.filter((c) => c.id !== id);
+
+    if (id === activeId) {
+      if (remaining.length > 0) {
+        const next = remaining[0];
+        saveActiveId(next.id);
+        setActiveId(next.id);
+        setMessages(next.messages);
+        setGraph(next.graph);
+        setDecisions(next.decisions);
+      } else {
+        const newId = genId();
+        const nc: SavedChat = {
+          id: newId, name: "New Chat",
+          createdAt: Date.now(), updatedAt: Date.now(),
+          messages: [greeting()], graph: null, decisions: [],
+        };
+        remaining.push(nc);
+        saveActiveId(newId);
+        setActiveId(newId);
+        setMessages([greeting()]);
+        setGraph(null);
+        setDecisions([]);
+      }
+    }
+
+    saveAllChats(remaining);
+    setAllChats(remaining);
+    setErr(null);
+  }
+
+  function close() { onClose(); }
+
+  // ── Send ─────────────────────────────────────────────────────────────────
 
   async function send() {
     const text = input.trim();
@@ -173,7 +318,7 @@ export function StrategyChat({
         setMessages((m) => [
           ...m,
           {
-            role:    "assistant",
+            role: "assistant",
             content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes). Review it below and click "Load onto canvas" when you're happy.`,
           },
         ]);
@@ -205,7 +350,7 @@ export function StrategyChat({
         setMessages((m) => [
           ...m,
           {
-            role:    "assistant",
+            role: "assistant",
             content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes). Review it below and click "Load onto canvas" when you're happy.`,
           },
         ]);
@@ -234,20 +379,88 @@ export function StrategyChat({
 
   if (!open) return null;
 
+  const sortedChats = [...allChats].sort((a, b) => b.updatedAt - a.updatedAt);
+
   return (
-    <div className="fixed inset-0 z-50 bg-paper/95 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-surface border border-border rounded-2xl shadow-float w-full max-w-2xl flex flex-col"
-           style={{ height: "min(700px, 90vh)" }}>
+    <div className="fixed inset-0 z-50 bg-paper/95 backdrop-blur-sm flex">
+
+      {/* ── History Sidebar ─────────────────────────────────────────────── */}
+      <div
+        className={`flex-shrink-0 border-r border-border bg-paper flex flex-col transition-[width] duration-200 overflow-hidden ${
+          showHistory ? "w-64" : "w-0"
+        }`}
+      >
+        <div className="px-3 py-3 border-b border-border flex items-center justify-between shrink-0">
+          <span className="text-[11px] uppercase tracking-widest text-muted font-semibold">Saved Chats</span>
+          <button
+            onClick={newChat}
+            className="text-[11px] px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-surface2 transition-colors whitespace-nowrap"
+          >
+            + New
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {sortedChats.length === 0 ? (
+            <p className="text-[12px] text-muted px-3 py-4">No saved chats yet.</p>
+          ) : (
+            sortedChats.map((c) => (
+              <div
+                key={c.id}
+                onClick={() => switchChat(c.id)}
+                className={`group px-3 py-2.5 cursor-pointer border-b border-border/40 flex items-start gap-2 hover:bg-surface2 transition-colors ${
+                  c.id === activeId ? "bg-surface2 border-l-2 border-l-money" : ""
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className={`text-[12.5px] truncate leading-snug ${c.id === activeId ? "text-ink font-medium" : "text-ink/80"}`}>
+                    {c.name}
+                  </div>
+                  <div className="text-[10.5px] text-muted mt-0.5">
+                    {formatDate(c.updatedAt)} · {c.messages.filter((m) => m.role === "user").length} msgs
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => deleteChat(c.id, e)}
+                  title="Delete chat"
+                  className="opacity-0 group-hover:opacity-100 text-muted hover:text-down text-[14px] mt-0.5 shrink-0 transition-opacity leading-none"
+                >
+                  ×
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* ── Main Chat Area ───────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 bg-surface">
 
         {/* Header */}
         <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3 shrink-0">
-          <div>
-            <div className="flex items-center gap-2 mb-0.5">
-              <span className="text-[10px] uppercase tracking-widest text-money font-semibold">AI Strategy Builder</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-highlight text-highlightInk font-medium">Beta</span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowHistory((v) => !v)}
+              title={showHistory ? "Hide saved chats" : "Show saved chats"}
+              className={`p-1.5 rounded-lg border transition-colors text-[15px] leading-none ${
+                showHistory
+                  ? "border-money/40 bg-money/10 text-money"
+                  : "border-border text-muted hover:text-ink hover:bg-surface2"
+              }`}
+            >
+              ☰
+            </button>
+            <div>
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-[10px] uppercase tracking-widest text-money font-semibold">SOROS</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-highlight text-highlightInk font-medium">AI</span>
+              </div>
+              <h2 className="text-[17px] font-semibold text-ink">
+                {editing ? "Refine with SOROS" : "Build with SOROS"}
+              </h2>
             </div>
-            <h2 className="text-[17px] font-semibold text-ink">{editing ? "Edit your strategy" : "Describe your strategy"}</h2>
           </div>
+
           <div className="flex items-center gap-2 shrink-0">
             <label className="flex items-center gap-1.5" title="Choose which AI model answers">
               <span className="text-[10px] uppercase tracking-wide text-muted">Model</span>
@@ -262,19 +475,21 @@ export function StrategyChat({
                 ))}
               </select>
             </label>
-            <button onClick={newChat}
-              title="Start a fresh conversation (clears saved context)"
-              className="text-[11px] px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-surface2 transition-colors">
+            <button
+              onClick={newChat}
+              title="Start a fresh conversation"
+              className="text-[11px] px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-surface2 transition-colors"
+            >
               New chat
             </button>
             <button onClick={close} className="text-muted hover:text-ink text-2xl leading-none px-2">×</button>
           </div>
         </div>
 
-        {/* Using the free built-in Claude (no user key set) */}
+        {/* Free built-in notice */}
         {!hasKey && (
           <div className="mx-5 mt-3 shrink-0 rounded-lg border border-sage/30 bg-sage/10 px-3 py-2 text-[12px] text-ink/80">
-            Using Edgekit's built-in <strong>Claude</strong> assistant — free, with a daily limit.{" "}
+            SOROS is powered by <strong>Claude</strong> — free daily limit applies.{" "}
             <Link href="/resources" className="underline font-medium" onClick={close}>
               Add your own AI key
             </Link>{" "}
@@ -285,13 +500,10 @@ export function StrategyChat({
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-            >
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               {m.role === "assistant" && (
                 <div className="w-7 h-7 rounded-full bg-money/15 flex items-center justify-center text-money text-[13px] shrink-0 mt-0.5 mr-2">
-                  E
+                  S
                 </div>
               )}
               <div
@@ -301,7 +513,6 @@ export function StrategyChat({
                     : "bg-surface2 text-ink rounded-bl-sm border border-border"
                 }`}
               >
-                {/* Simple markdown bold support */}
                 {m.content.split(/(\*\*[^*]+\*\*)/).map((part, j) =>
                   part.startsWith("**") && part.endsWith("**")
                     ? <strong key={j}>{part.slice(2, -2)}</strong>
@@ -311,7 +522,7 @@ export function StrategyChat({
             </div>
           ))}
 
-          {/* Starter prompt chips — only shown on a fresh chat (greeting + no user turns) */}
+          {/* Starter prompts — fresh chat only */}
           {!editing && messages.length === 1 && messages[0].role === "assistant" && !busy && (
             <div className="mt-1 ml-9">
               <p className="text-[11px] text-muted mb-2 uppercase tracking-wide font-medium">Try an example</p>
@@ -331,7 +542,7 @@ export function StrategyChat({
 
           {busy && (
             <div className="flex justify-start">
-              <div className="w-7 h-7 rounded-full bg-money/15 flex items-center justify-center text-money text-[13px] shrink-0 mt-0.5 mr-2">E</div>
+              <div className="w-7 h-7 rounded-full bg-money/15 flex items-center justify-center text-money text-[13px] shrink-0 mt-0.5 mr-2">S</div>
               <div className="bg-surface2 border border-border rounded-2xl rounded-bl-sm px-4 py-3 text-[13.5px] text-muted">
                 <span className="inline-flex gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-muted animate-bounce" style={{ animationDelay: "0ms" }} />
@@ -351,11 +562,12 @@ export function StrategyChat({
           <div ref={bottomRef} />
         </div>
 
-        {/* "Here's what I decided" — the variables the AI auto-picked */}
+        {/* Decisions panel */}
         {graph && decisions.length > 0 && (
           <div className="mx-5 mb-2 shrink-0 rounded-xl border border-border bg-paper px-4 py-3 max-h-[180px] overflow-y-auto">
             <div className="text-[11px] font-semibold text-ink mb-1.5">
-              Here's what I set <span className="font-normal text-muted">— edit any of these on the canvas after loading</span>
+              Here's what I set{" "}
+              <span className="font-normal text-muted">— edit any of these on the canvas after loading</span>
             </div>
             <div className="space-y-1.5">
               {decisions.map((d) => (
@@ -376,7 +588,7 @@ export function StrategyChat({
           </div>
         )}
 
-        {/* Graph preview bar (when AI has built a graph) */}
+        {/* Graph preview bar */}
         {graph && (
           <div className="mx-5 mb-3 shrink-0 rounded-xl border border-up/30 bg-up/5 px-4 py-3 flex items-center gap-3">
             <div className="flex-1">
@@ -401,7 +613,6 @@ export function StrategyChat({
 
         {/* Input */}
         <div className="px-5 pb-4 shrink-0 border-t border-border pt-3">
-          {/* Attached reference image preview */}
           {image && (
             <div className="mb-2 flex items-center gap-2">
               <div className="relative">
@@ -410,7 +621,8 @@ export function StrategyChat({
                 <button
                   onClick={() => setImage(null)}
                   title="Remove image"
-                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-ink text-white text-xs leading-none flex items-center justify-center shadow">
+                  className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-ink text-white text-xs leading-none flex items-center justify-center shadow"
+                >
                   ×
                 </button>
               </div>
@@ -420,7 +632,8 @@ export function StrategyChat({
           <div className="flex gap-2 items-end">
             <label
               title="Attach a chart screenshot"
-              className="shrink-0 h-[44px] w-[44px] flex items-center justify-center rounded-xl border border-border bg-paper hover:bg-surface2 cursor-pointer text-lg text-muted">
+              className="shrink-0 h-[44px] w-[44px] flex items-center justify-center rounded-xl border border-border bg-paper hover:bg-surface2 cursor-pointer text-lg text-muted"
+            >
               🖼
               <input
                 type="file"
@@ -437,7 +650,7 @@ export function StrategyChat({
               onKeyDown={handleKey}
               onPaste={(e) => {
                 const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
-                if (item) { const f = item.getAsFile(); if (f) { readImage(f); } }
+                if (item) { const f = item.getAsFile(); if (f) readImage(f); }
               }}
               rows={2}
               placeholder="Type your answer… (Enter to send · paste or attach a chart 🖼)"
@@ -459,6 +672,13 @@ export function StrategyChat({
           </p>
         </div>
       </div>
+
+      {/* ── Contextual Suggestions Sidebar ──────────────────────────────── */}
+      <SuggestionsPanel
+        messages={messages}
+        onSuggest={(text) => { setInput(text); setTimeout(() => inputRef.current?.focus(), 30); }}
+        label="Try asking"
+      />
     </div>
   );
 }
