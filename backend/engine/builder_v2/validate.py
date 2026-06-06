@@ -11,14 +11,30 @@ Rules:
   7. Topological order is attached as graph["__topo__"].
 """
 from __future__ import annotations
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .nodes import NODE_LIBRARY
 
 
-def validate_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
+def validate_graph(graph: Dict[str, Any], node_library: Optional[Dict] = None) -> Dict[str, Any]:
+    """
+    Validate and normalise a V2 graph dict.
+
+    node_library — pass an already-merged library (NODE_LIBRARY + user defs) to
+    avoid re-registering user nodes on every call. When omitted the global
+    NODE_LIBRARY is used and any graph.user_defs are registered inline.
+    """
     if not isinstance(graph, dict):
         raise ValueError("Graph must be an object.")
+
+    if node_library is None:
+        from .user_nodes import build_user_node_spec
+        lib = dict(NODE_LIBRARY)
+        for udef in graph.get("user_defs", []):
+            spec = build_user_node_spec(udef)
+            lib[spec.type] = spec
+    else:
+        lib = node_library
     nodes = graph.get("nodes")
     if not isinstance(nodes, list) or not nodes:
         raise ValueError("Graph must contain a non-empty 'nodes' array.")
@@ -31,7 +47,7 @@ def validate_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
         ntype = n.get("type")
         if not nid:                          raise ValueError("Every node needs an 'id'.")
         if nid in by_id:                     raise ValueError(f"Duplicate node id: {nid}")
-        spec = NODE_LIBRARY.get(ntype)
+        spec = lib.get(ntype)
         if spec is None:
             raise ValueError(f"Unknown node type: {ntype}")
         params = dict(n.get("params") or {})
@@ -42,9 +58,9 @@ def validate_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
 
     # 2) Validate edges + types
     norm_edges = []
-    out_ports_by_src = {nid: {p[0]: p[1] for p in NODE_LIBRARY[n["type"]].outputs}
+    out_ports_by_src = {nid: {p[0]: p[1] for p in lib[n["type"]].outputs}
                         for nid, n in by_id.items()}
-    in_ports_by_tgt  = {nid: {p[0]: p[1] for p in NODE_LIBRARY[n["type"]].inputs}
+    in_ports_by_tgt  = {nid: {p[0]: p[1] for p in lib[n["type"]].inputs}
                         for nid, n in by_id.items()}
 
     for e in edges:
@@ -85,14 +101,14 @@ def validate_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
     graph["__topo__"] = topo
 
     # 4) At least one execution sink
-    sinks = [n for n in nodes if NODE_LIBRARY[n["type"]].lane == "execution"]
+    sinks = [n for n in nodes if lib[n["type"]].lane == "execution"]
     if not sinks:
         raise ValueError("Graph needs at least one Execution node (the sink).")
 
     # 5) Every required input on every node must be wired
     wired = {(e["to"], e["to_port"]) for e in norm_edges}
     for nid, n in by_id.items():
-        for in_port, _t in NODE_LIBRARY[n["type"]].inputs:
+        for in_port, _t in lib[n["type"]].inputs:
             if (nid, in_port) not in wired:
                 raise ValueError(f"Node {nid} ({n['type']}) has unwired input '{in_port}'.")
 

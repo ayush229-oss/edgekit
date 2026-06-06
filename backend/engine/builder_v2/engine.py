@@ -21,6 +21,7 @@ from .nodes import NODE_LIBRARY, NodeSpec
 from .types import RunContext, OrderIntent
 from .validate import validate_graph
 from .safety import frozen_view
+from .user_nodes import build_user_node_spec
 
 
 class GraphV2Strategy:
@@ -32,7 +33,13 @@ class GraphV2Strategy:
     param_schema: List[Any] = []
 
     def __init__(self, graph: Dict[str, Any]):
-        self.graph = validate_graph(graph)
+        # Merge global library with any user-defined nodes in this graph
+        self._lib = dict(NODE_LIBRARY)
+        for udef in graph.get("user_defs", []):
+            spec = build_user_node_spec(udef)
+            self._lib[spec.type] = spec
+
+        self.graph = validate_graph(graph, node_library=self._lib)
         self.nodes = {n["id"]: n for n in self.graph["nodes"]}
         self.edges = self.graph["edges"]
 
@@ -46,7 +53,7 @@ class GraphV2Strategy:
 
         # Identify the execution sinks (final nodes that produce OrderIntents)
         self._sinks = [nid for nid, n in self.nodes.items()
-                       if NODE_LIBRARY[n["type"]].lane == "execution"]
+                       if self._lib[n["type"]].lane == "execution"]
 
     def default_params(self):
         return {"pip": 0.10}
@@ -61,7 +68,7 @@ class GraphV2Strategy:
         #    collect any chart artifacts (zones/levels/markers) the node exposes.
         for nid in self._topo:
             n    = self.nodes[nid]
-            spec = NODE_LIBRARY[n["type"]]
+            spec = self._lib[n["type"]]
             if spec.prepare_fn:
                 spec.prepare_fn(df, ctx, n["params"])
             if getattr(spec, "artifacts_fn", None):
@@ -85,7 +92,7 @@ class GraphV2Strategy:
 
             for nid in self._topo:
                 n    = self.nodes[nid]
-                spec = NODE_LIBRARY[n["type"]]
+                spec = self._lib[n["type"]]
 
                 # Assemble inputs from incoming edges
                 inputs = {}

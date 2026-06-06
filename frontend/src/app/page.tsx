@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { listStrategies, getGlobalStats, API_URL, efetch } from "@/lib/api";
+import { listStrategies, API_URL, efetch } from "@/lib/api";
+import { LogoMark } from "@/components/LogoMark";
 import { TradeClipPair } from "@/components/TradeClip";
 
 export const revalidate = 300;
@@ -54,11 +55,6 @@ const PROBLEMS = [
 export default async function LandingPage() {
   let strategies: Awaited<ReturnType<typeof listStrategies>> = [];
   try { strategies = await listStrategies(); } catch {}
-  const rawStats    = await getGlobalStats().catch(() => ({ total_backtests: 0, total_users: 0 }));
-  const globalStats = {
-    total_backtests: Math.max(rawStats.total_backtests, 250),
-    total_users:     Math.max(rawStats.total_users, 8),
-  };
 
   const featured = strategies.slice(0, 3);
   const previewResults = await Promise.allSettled(
@@ -78,7 +74,7 @@ export default async function LandingPage() {
       <header className="sticky top-0 z-40 border-b border-border bg-paper/90 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2 group">
-            <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px] group-hover:bg-money transition-colors">E</div>
+            <LogoMark size={24} />
             <span className="font-semibold tracking-tight text-[15px]">Edgekit</span>
             <span className="text-[10px] uppercase tracking-widest text-muted px-1.5 py-0.5 rounded bg-surface2 ml-1">beta</span>
           </Link>
@@ -123,18 +119,8 @@ export default async function LandingPage() {
 
       {/* ── PROOF BAR ────────────────────────────────────────────────────────── */}
       <div className="border-y border-border bg-surface">
-        <div className="max-w-5xl mx-auto px-6 py-5 grid grid-cols-2 sm:grid-cols-4 gap-6 text-center">
+        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-center gap-12 text-center flex-wrap">
           {[
-            {
-              v: globalStats.total_backtests >= 1000
-                ? `${(globalStats.total_backtests / 1000).toFixed(1)}k+`
-                : `${globalStats.total_backtests}+`,
-              l: "Backtests run",
-            },
-            {
-              v: `${globalStats.total_users}+`,
-              l: "Traders using Edgekit",
-            },
             { v: "M1 → D1", l: "Every timeframe" },
             { v: "2 sec",   l: "Average backtest time" },
           ].map(({ v, l }) => (
@@ -288,7 +274,7 @@ export default async function LandingPage() {
       <footer className="border-t border-border">
         <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4 text-[12px] text-muted">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded bg-ink flex items-center justify-center text-paper font-bold text-[10px]">E</div>
+            <LogoMark size={20} />
             <span>Edgekit · Operated by Satyasakshi</span>
           </div>
           <div className="flex items-center gap-5">

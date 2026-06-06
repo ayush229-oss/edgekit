@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { LogoMark } from "@/components/LogoMark";
 
 // ── Step 1 options ────────────────────────────────────────────────────────────
 const TRADER_TYPES = [
@@ -123,7 +124,7 @@ export default function OnboardingPage() {
       {/* Nav */}
       <header className="border-b border-border px-6 h-14 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md bg-ink flex items-center justify-center text-paper font-bold text-[11px]">E</div>
+          <LogoMark size={24} />
           <span className="font-semibold tracking-tight text-[15px]">Edgekit</span>
         </div>
         <button onClick={skip} className="text-[12px] text-muted hover:text-ink transition-colors">

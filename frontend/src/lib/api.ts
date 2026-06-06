@@ -41,7 +41,9 @@ export type StrategySummary = {
 export type BacktestMetrics = {
   trades: number; wr: number; ev: number; total_r: number;
   profit_factor: number; max_dd: number;
-  avg_win: number; avg_loss: number; final_equity: number;
+  avg_win: number; avg_loss: number; avg_rr: number; final_equity: number;
+  sharpe?: number | null; sortino?: number | null;
+  calmar?: number | null; cagr?: number | null;
   n_setups: number; n_unresolved: number;
   exit_counts: Record<string, number>;
 };
@@ -175,10 +177,24 @@ export type V2GraphEdge = {
   to_port:   string;
 };
 
+export type V2UserNodeDef = {
+  id:           string;
+  type:         string;
+  label:        string;
+  description:  string;
+  lane:         "indicator" | "alpha" | "filter" | "sizing" | "risk" | "exit";
+  outputs:      { name: string; type: string }[];
+  extra_inputs: { name: string; type: string }[];
+  params_spec:  { key: string; label: string; type: "int" | "float"; default: number; min?: number; max?: number }[];
+  formulas:     Record<string, string>;
+  created_at:   number;
+};
+
 export type V2Graph = {
-  name:  string;
-  nodes: V2GraphNode[];
-  edges: V2GraphEdge[];
+  name:       string;
+  nodes:      V2GraphNode[];
+  edges:      V2GraphEdge[];
+  user_defs?: V2UserNodeDef[];
 };
 
 export type V2Complexity = {
@@ -390,6 +406,27 @@ async function readApiError(r: Response): Promise<string> {
   }
 }
 
+export async function v2NodeFromText(description: string): Promise<{
+  label: string; description: string; lane: "indicator";
+  outputs: { name: string; type: "number" | "series" }[];
+  params_spec: { key: string; label: string; type: "int" | "float"; default: number; min?: number; max?: number }[];
+  formulas: Record<string, string>;
+}> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const ai = getUserAIKey();
+  if (ai) {
+    headers["X-AI-Key"]      = ai.key;
+    headers["X-AI-Provider"] = ai.provider;
+  }
+  const r = await efetch(`${API_URL}/graph/v2/node-from-text`, {
+    method:  "POST",
+    headers,
+    body:    JSON.stringify({ description }),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
+  return r.json();
+}
+
 export async function v2FromText(body: { description: string; symbol?: string; timeframe?: string; image?: string }): Promise<V2Graph> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const ai = getUserAIKey();
@@ -468,6 +505,49 @@ export async function v2RunBacktest(body: any): Promise<BacktestResponse> {
     body:    JSON.stringify(body),
   });
   if (!r.ok) throw new Error((await r.text()) || `v2 backtest: ${r.status}`);
+  return r.json();
+}
+
+export type SweepParamRange = { node_id: string; param_key: string; values: any[] };
+export type SweepResultRow  = { params: Record<string, any>; trades: number; wr: number; total_r: number; profit_factor: number; max_dd: number; sharpe?: number | null; sortino?: number | null };
+
+export async function v2Sweep(body: {
+  graph: V2Graph; param_ranges: SweepParamRange[];
+  data_source?: string; symbol?: string; timeframe?: string; n_bars?: number;
+  csv_data_id?: string; target_r?: number; trail_mode?: string;
+  spread_pips?: number; commission?: number; slippage_pips?: number;
+}): Promise<{ results: SweepResultRow[]; combinations_tried: number }> {
+  const r = await efetch(`${API_URL}/graph/v2/sweep`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
+  return r.json();
+}
+
+export async function v2WalkForward(body: {
+  graph: V2Graph; data_source?: string; symbol?: string; timeframe?: string;
+  n_bars?: number; csv_data_id?: string; n_splits?: number; is_pct?: number;
+  target_r?: number; trail_mode?: string; spread_pips?: number; commission?: number;
+}): Promise<{ windows: any[]; oos_equity: number[]; n_splits: number }> {
+  const r = await efetch(`${API_URL}/graph/v2/walk-forward`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
+  return r.json();
+}
+
+export async function v2MonteCarlo(body: {
+  graph: V2Graph; data_source?: string; symbol?: string; timeframe?: string;
+  n_bars?: number; csv_data_id?: string; n_sims?: number;
+  target_r?: number; trail_mode?: string; spread_pips?: number; commission?: number;
+}): Promise<{ n_sims: number; n_trades: number; percentiles: Record<string, number[]>; base_metrics: any }> {
+  const r = await efetch(`${API_URL}/graph/v2/monte-carlo`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
   return r.json();
 }
 

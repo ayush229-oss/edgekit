@@ -107,23 +107,83 @@ def load_csv(source: Union[str, Path, io.IOBase, bytes]) -> pd.DataFrame:
 
 
 def validate_ohlcv(df: pd.DataFrame) -> dict:
-    """Sanity check an OHLCV frame. Returns dict of issues found (empty = healthy)."""
-    issues = {}
+    """
+    Sanity-check an OHLCV frame. Returns a dict of issues found (empty = healthy).
+
+    Checks performed
+    ----------------
+    too_few_bars          — fewer than 200 bars
+    not_chronological     — rows out of time order after sort
+    high_below_low        — H < L (inverted candle)
+    oc_outside_hl         — O or C outside the H–L range
+    duplicate_timestamps  — same timestamp appears twice
+    large_time_gaps       — gaps > 50× the median gap (missing sessions)
+    missing_bars_estimate — count of expected-but-absent bars based on median gap
+    zero_volume_pct       — % of bars with V == 0 (suspicious if > 30%)
+    outlier_wicks         — bars whose H-L range is > 10× the median range
+    quality_score         — 0–100 composite score (100 = perfect)
+    """
+    issues: dict = {}
     n = len(df)
+
     if n < 200:
         issues["too_few_bars"] = f"Only {n} bars — backtest needs ~200+ for stable stats."
-    bad_hl  = (df["H"] < df["L"]).sum()
-    bad_oc  = ((df["O"] > df["H"]) | (df["O"] < df["L"]) |
-               (df["C"] > df["H"]) | (df["C"] < df["L"])).sum()
-    if bad_hl: issues["high_below_low"]      = int(bad_hl)
-    if bad_oc: issues["oc_outside_hl"]       = int(bad_oc)
-    dupe = df["time"].duplicated().sum()
-    if dupe: issues["duplicate_timestamps"]  = int(dupe)
+
+    # Chronological order
+    if not df["time"].is_monotonic_increasing:
+        n_unordered = int((df["time"].diff().dropna() < pd.Timedelta(0)).sum())
+        issues["not_chronological"] = n_unordered
+
+    # Inverted candles
+    bad_hl  = int((df["H"] < df["L"]).sum())
+    bad_oc  = int(((df["O"] > df["H"]) | (df["O"] < df["L"]) |
+                   (df["C"] > df["H"]) | (df["C"] < df["L"])).sum())
+    if bad_hl: issues["high_below_low"]  = bad_hl
+    if bad_oc: issues["oc_outside_hl"]   = bad_oc
+
+    # Duplicate timestamps
+    dupe = int(df["time"].duplicated().sum())
+    if dupe: issues["duplicate_timestamps"] = dupe
+
+    # Time gaps
     gaps = df["time"].diff().dropna()
     if len(gaps) > 5:
         median_gap = gaps.median()
-        big_gaps   = (gaps > median_gap * 50).sum()
-        if big_gaps: issues["large_time_gaps"] = int(big_gaps)
+        if median_gap > pd.Timedelta(0):
+            big_gaps    = int((gaps > median_gap * 50).sum())
+            # Estimate missing bars: total expected minus actual
+            span        = df["time"].iloc[-1] - df["time"].iloc[0]
+            expected    = max(1, int(span / median_gap))
+            missing_est = max(0, expected - n)
+            if big_gaps:    issues["large_time_gaps"]      = big_gaps
+            if missing_est > n * 0.05:
+                issues["missing_bars_estimate"] = missing_est
+
+    # Zero volume
+    if "V" in df.columns:
+        zero_vol_pct = float((df["V"] == 0).sum()) / n * 100
+        if zero_vol_pct > 30:
+            issues["zero_volume_pct"] = round(zero_vol_pct, 1)
+
+    # Outlier wicks (H-L range > 10× median)
+    hl_range = (df["H"] - df["L"])
+    median_range = hl_range.median()
+    if median_range > 0:
+        outlier_wicks = int((hl_range > median_range * 10).sum())
+        if outlier_wicks:
+            issues["outlier_wicks"] = outlier_wicks
+
+    # Composite quality score (0–100)
+    deductions = 0
+    deductions += min(40, bad_hl * 5)
+    deductions += min(20, bad_oc * 2)
+    deductions += min(10, dupe * 2)
+    deductions += min(10, issues.get("large_time_gaps", 0) * 2)
+    deductions += min(10, issues.get("outlier_wicks", 0))
+    deductions += 5 if "zero_volume_pct" in issues else 0
+    deductions += 5 if n < 200 else 0
+    issues["quality_score"] = max(0, 100 - deductions)
+
     return issues
 
 

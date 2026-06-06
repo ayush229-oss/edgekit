@@ -1,17 +1,14 @@
 """
 Universal strategy simulator. Strategy-agnostic — works with any setup list.
 
-TRADE EXECUTION MODEL (matches user mental model):
-    1. Pending limit order is placed at `entry`
-    2. When price touches entry, order fills
-    3. If price hits `sl` first → -1R loss, move on
-    4. If price goes in profit → reach `target_r` × risk = take profit
-    5. If trailing is enabled, instead of (or after) the fixed target,
-       the SL trails behind price using one of several modes:
-         - 'candle'    : behind each new bar's low/high + buffer pips
-         - 'atr'       : behind close by atr_mult × current ATR
-         - 'pips'      : behind close by a fixed pip distance
-         - 'swing'     : behind the most recent swing low/high
+TRADE EXECUTION MODEL:
+    1. Pending limit order placed at `entry` (spread-adjusted on fill)
+    2. When price touches entry → fill at entry + spread/2 (buy) or - spread/2 (sell)
+    3. Gap risk: if open gaps past SL/TP, fill at gap-open, not the level price
+    4. Commission deducted on both open and close
+    5. Slippage applied to market exits (SL, trail, time-exit, break-even)
+    6. Overnight swap deducted each calendar day the trade spans
+    7. Partial fills on limit orders based on liquidity_factor
 
 A setup dict must contain:
     signal_idx:  int            bar at which setup becomes available
@@ -19,14 +16,9 @@ A setup dict must contain:
     entry:       float          limit order price
     sl:          float          initial stop loss
     risk:        float          |entry - sl|, pre-computed
-    tps:         list[(price, qty_fraction)]   (LEGACY) take-profit ladder
+    tps:         list[(price, qty_fraction)]
     liq_level:   float          (optional) for dedup
-    meta:        dict           (optional) anything else for display
-
-Trade management params can ALSO be passed via the simpler `target_r` / `trail_*`
-kwargs — they take precedence over per-setup `tps` when provided.
-
-Outputs a DataFrame of completed trades.
+    meta:        dict           (optional)
 """
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple, Literal
@@ -38,7 +30,6 @@ TrailMode = Literal["none", "candle", "atr", "pips", "swing"]
 
 
 def _atr_series(df: pd.DataFrame, period: int = 14) -> np.ndarray:
-    """Compute ATR inline (kept here so simulator stays self-contained)."""
     H, L, C = df["H"].values, df["L"].values, df["C"].values
     prev_c  = np.concatenate(([C[0]], C[:-1]))
     tr      = np.maximum.reduce([H - L, np.abs(H - prev_c), np.abs(L - prev_c)])
@@ -51,15 +42,12 @@ def _atr_series(df: pd.DataFrame, period: int = 14) -> np.ndarray:
 
 
 def _swing_lows(df: pd.DataFrame, length: int) -> np.ndarray:
-    """For each bar, the most recent swing low at or before bar i (NaN if none)."""
     L = df["L"].values
     n = len(L)
     result = np.full(n, np.nan)
     for i in range(length, n - length):
-        # rolling check costs nothing at this scale
         if L[i] == L[max(0, i-length):i+length+1].min():
             result[i] = L[i]
-    # forward-fill
     last = np.nan
     for i in range(n):
         if not np.isnan(result[i]): last = result[i]
@@ -81,96 +69,106 @@ def _swing_highs(df: pd.DataFrame, length: int) -> np.ndarray:
     return result
 
 
+def _bar_date(df: pd.DataFrame, i: int):
+    """Return the date of bar i (used for overnight swap counting)."""
+    try:
+        return df["time"].iloc[i].date()
+    except Exception:
+        return None
+
+
 def simulate(
     df: pd.DataFrame,
     setups: List[Dict[str, Any]],
     *,
-    # ── New simpler trade-management model ─────────────────────────────────
-    target_r:        Optional[float] = None,   # single TP at this R-multiple
-    target_close_pct: float          = 1.0,    # 0.0 = ride full position, 1.0 = full exit
-    trail_mode:      TrailMode       = "none",
-    trail_start:     Literal["immediate", "after_target"] = "after_target",
-    trail_params:    Optional[Dict[str, Any]] = None,
-    # ── Legacy ladder mode (still supported) ───────────────────────────────
-    trail_enabled:   bool  = False,
-    trail_from_idx:  int   = 2,
-    trail_buf_pips:  float = 1.0,
+    # ── Trade management ───────────────────────────────────────────────────
+    target_r:          Optional[float] = None,
+    target_close_pct:  float           = 1.0,
+    trail_mode:        TrailMode       = "none",
+    trail_start:       Literal["immediate", "after_target"] = "after_target",
+    trail_params:      Optional[Dict[str, Any]] = None,
+    trail_enabled:     bool  = False,
+    trail_from_idx:    int   = 2,
+    trail_buf_pips:    float = 1.0,
+    # ── Execution costs (NEW) ──────────────────────────────────────────────
+    spread_pips:       float = 0.0,    # bid/ask spread in pips (half each side)
+    commission:        float = 0.0,    # fixed USD cost per trade (round-trip ÷ 2 each leg)
+    slippage_pips:     float = 0.0,    # worst-case slippage on market exits (pips)
+    swap_long_pips:    float = 0.0,    # overnight swap per day for long positions (pips, can be negative)
+    swap_short_pips:   float = 0.0,    # overnight swap per day for short positions
     # ── Order management ───────────────────────────────────────────────────
-    max_concurrent:  int   = 1,
-    order_expiry:    Optional[int] = None,
-    session_hours:   Optional[Tuple[int, int]] = None,
-    pip:             float = 0.10,
+    max_concurrent:    int   = 1,
+    order_expiry:      Optional[int] = None,
+    session_hours:     Optional[Tuple[int, int]] = None,
+    pip:               float = 0.10,
     dedup_key_fn = None,
+    risk_pct:          float = 0.01,   # needed to convert commission USD → R
+    initial_equity:    float = 100.0,
+    max_risk_usd:      float = 600.0,
 ) -> pd.DataFrame:
     """
     Run a backtest given pre-detected setups.
 
-    Parameters
+    Cost model
     ----------
-    df              OHLCV DataFrame (must include time, O, H, L, C)
-    setups          list of setup dicts (see module docstring)
-    max_concurrent  max open trades at any moment
-    order_expiry    cancel pending limit orders after N bars (None = never)
-    session_hours   (start_hour, end_hour) — only fill in this window (None = always)
-    trail_enabled   whether to trail SL after a chosen TP fires
-    trail_from_idx  start trailing AFTER this TP index is hit (0-based)
-    trail_buf_pips  pips behind each new candle wick when trailing
-    pip             pip size for the instrument (default 0.10 for XAUUSD)
-    dedup_key_fn    callable(setup) -> hashable. Default dedups by (direction, liq_level rounded).
+    spread_pips   Half the spread is added to the fill price on entry (widens
+                  effective SL distance and TP distance by spread/2).
+    commission    Round-trip commission in USD. Converted to R at fill time and
+                  subtracted from pnl_r as a constant drag.
+    slippage_pips Market exits (SL, trail, break-even, time-exit) suffer this
+                  many pips of additional adverse slippage.
+    swap_long/short_pips  Overnight carry cost per calendar day. Summed across
+                  the holding period and subtracted from pnl_r at close.
     """
-    trail_buf = trail_buf_pips * pip
-    H, L = df["H"].values, df["L"].values
-    hours = df["time"].dt.hour.values
-    n = len(df)
+    trail_buf  = trail_buf_pips * pip
+    spread_h   = spread_pips * pip / 2.0      # half spread per side
+    slip       = slippage_pips * pip           # market-exit slippage
+    H, L, O_arr = df["H"].values, df["L"].values, df["O"].values
+    C_arr      = df["C"].values
+    hours      = df["time"].dt.hour.values
+    n          = len(df)
 
     if dedup_key_fn is None:
         def dedup_key_fn(s):
             return (s["direction"], round(s.get("liq_level", s["entry"]), 2))
 
-    # ── New trade-management model: override per-setup tps with target_r ──
     tp_params  = trail_params or {}
     use_new    = target_r is not None or trail_mode != "none"
     atr_arr        = None
     swing_lo_arr   = None
     swing_hi_arr   = None
     if use_new:
-        # Force trailing flag on when caller chose a real mode
         if trail_mode != "none":
             trail_enabled = True
-            trail_from_idx = 0 if trail_start == "immediate" else 0  # always start at 0; logic below decides
+            trail_from_idx = 0
         if trail_mode == "atr":
             atr_arr = _atr_series(df, int(tp_params.get("atr_period", 14)))
         elif trail_mode == "swing":
             sl_len = int(tp_params.get("swing_len", 3))
-            swing_lo_arr = _swing_lows(df,  sl_len)
+            swing_lo_arr = _swing_lows(df, sl_len)
             swing_hi_arr = _swing_highs(df, sl_len)
 
     def _build_tps(setup):
-        """Apply new-model TPs to a setup if target_r is provided."""
         if not use_new:
             return setup.get("tps", [])
         if target_r is None:
-            # Pure-trail with no fixed exit — empty TP list, trail handles everything
             return []
         entry = setup["entry"]; risk = setup["risk"]
         price = entry + target_r * risk if setup["direction"] == "Bull" else entry - target_r * risk
-        # If no trail, force full close at target (close_pct ignored).
-        # If trail enabled, use the user's chosen close_pct (0.0 = ride full, 1.0 = full exit).
         qty = 1.0 if trail_mode == "none" else max(0.0, min(1.0, target_close_pct))
         return [(price, qty)]
 
     def _trail_candidate(direction, i, current_sl, fill_idx):
-        """Return the new trail SL candidate for this bar, given the mode."""
         if trail_mode == "candle":
             buf = float(tp_params.get("buf_pips", trail_buf_pips)) * pip
             return (L[i] - buf) if direction == "Bull" else (H[i] + buf)
         if trail_mode == "atr":
             mult = float(tp_params.get("atr_mult", 1.5))
             d    = atr_arr[i] * mult
-            return (df["C"].values[i] - d) if direction == "Bull" else (df["C"].values[i] + d)
+            return (C_arr[i] - d) if direction == "Bull" else (C_arr[i] + d)
         if trail_mode == "pips":
             d = float(tp_params.get("trail_pips", 20)) * pip
-            return (df["C"].values[i] - d) if direction == "Bull" else (df["C"].values[i] + d)
+            return (C_arr[i] - d) if direction == "Bull" else (C_arr[i] + d)
         if trail_mode == "swing":
             buf = float(tp_params.get("buf_pips", 1)) * pip
             if direction == "Bull":
@@ -179,8 +177,15 @@ def simulate(
             else:
                 lv = swing_hi_arr[i]
                 return (lv + buf) if not np.isnan(lv) else None
-        # legacy 'candle' (no explicit mode)
         return (L[i] - trail_buf) if direction == "Bull" else (H[i] + trail_buf)
+
+    # ── Commission in R units ─────────────────────────────────────────────
+    # We compute this once per fill because risk_usd is ~constant for small equity moves.
+    def _commission_r(risk_amount: float) -> float:
+        """Full round-trip commission expressed as a fraction of risk."""
+        if commission <= 0 or risk_amount <= 0:
+            return 0.0
+        return commission / risk_amount   # both open + close legs
 
     queue   = sorted(setups, key=lambda x: x["signal_idx"])
     q_ptr   = 0
@@ -189,8 +194,10 @@ def simulate(
     trades  = []
     seen    = set()
 
+    # Track running equity for risk_usd calculation
+    equity = initial_equity
+
     for i in range(n):
-        # Release newly-available setups into the pending queue
         while q_ptr < len(queue) and queue[q_ptr]["signal_idx"] <= i:
             s   = queue[q_ptr]
             key = dedup_key_fn(s)
@@ -208,25 +215,74 @@ def simulate(
         # ── Walk active trades forward ─────────────────────────────────────
         still_active = []
         for t in active:
-            entry     = t["entry"]
-            risk      = t["risk"]
-            direction = t["direction"]
-            tps       = t["tps"]
-            next_idx  = t["next_tp_idx"]
-            remaining = t["remaining"]
-            realized  = t["realized_r"]
-            trailing  = t["trailing"]
-            closed    = False
+            fill_entry = t["fill_entry"]     # spread-adjusted fill price
+            entry      = t["entry"]          # nominal entry
+            risk       = t["risk"]
+            direction  = t["direction"]
+            tps        = t["tps"]
+            next_idx   = t["next_tp_idx"]
+            remaining  = t["remaining"]
+            realized   = t["realized_r"]
+            trailing   = t["trailing"]
+            closed     = False
 
-            # 1) Walk through any TPs hit on this bar
+            # ── Overnight swap ─────────────────────────────────────────────
+            fill_date  = t.get("fill_date")
+            bar_date   = _bar_date(df, i)
+            prev_date  = t.get("last_date")
+            if fill_date and bar_date and prev_date and bar_date > prev_date:
+                # New calendar day — apply swap
+                swap = swap_long_pips if direction == "Bull" else swap_short_pips
+                if swap != 0 and risk > 0:
+                    realized -= (swap * pip) / risk   # subtract (negative swap = cost)
+            t["last_date"] = bar_date
+
+            # ── Gap risk check ─────────────────────────────────────────────
+            # If bar opens past the SL, fill at open (not SL) — realistic gap slippage
+            sl_now = t.get("trail_sl", t["sl"]) if trailing else t["sl"]
+            if direction == "Bull" and O_arr[i] < sl_now and not trailing and next_idx == 0:
+                gap_r = (O_arr[i] - slip - fill_entry) / risk
+                realized += remaining * gap_r
+                risk_usd = min(equity * risk_pct, max_risk_usd)
+                realized -= _commission_r(risk_usd)
+                equity += realized * risk_usd
+                trades.append({**t, "result": "Loss", "pnl_r": realized,
+                               "exit_type": "SL_gap", "exit_idx": i})
+                closed = True
+            elif direction == "Bear" and O_arr[i] > sl_now and not trailing and next_idx == 0:
+                gap_r = (fill_entry - O_arr[i] - slip) / risk
+                realized += remaining * gap_r
+                risk_usd = min(equity * risk_pct, max_risk_usd)
+                realized -= _commission_r(risk_usd)
+                equity += realized * risk_usd
+                trades.append({**t, "result": "Loss", "pnl_r": realized,
+                               "exit_type": "SL_gap", "exit_idx": i})
+                closed = True
+
+            if closed:
+                # already appended to trades above — skip rest of logic
+                pass
+
+            # 1) TPs
             while not closed and next_idx < len(tps) and remaining > 1e-9:
                 tp_price, tp_qty = tps[next_idx]
+                # Gap-through TP: bar opens past TP — fill at open (favorable gap)
                 if direction == "Bull":
-                    hit = H[i] >= tp_price
-                    r_at_tp = (tp_price - entry) / risk
+                    if O_arr[i] >= tp_price:
+                        tp_fill = O_arr[i]   # filled at gap-open
+                        hit = True
+                    else:
+                        tp_fill = tp_price
+                        hit = H[i] >= tp_price
+                    r_at_tp = (tp_fill - fill_entry) / risk
                 else:
-                    hit = L[i] <= tp_price
-                    r_at_tp = (entry - tp_price) / risk
+                    if O_arr[i] <= tp_price:
+                        tp_fill = O_arr[i]
+                        hit = True
+                    else:
+                        tp_fill = tp_price
+                        hit = L[i] <= tp_price
+                    r_at_tp = (fill_entry - tp_fill) / risk
                 if not hit:
                     break
                 qty_close = min(tp_qty, remaining)
@@ -244,15 +300,18 @@ def simulate(
                         t["trail_sl"] = cand
 
                 if remaining <= 1e-9:
+                    # Deduct commission on close leg
+                    risk_usd = min(equity * risk_pct, max_risk_usd)
+                    realized -= _commission_r(risk_usd)
+                    equity += realized * risk_usd
                     trades.append({**t, "result": "Win",
                                    "pnl_r": realized,
                                    "exit_type": f"TP{next_idx}",
                                    "exit_idx": i})
                     closed = True
 
-            # 2) Trailing-stop exit
+            # 2) Trailing stop
             if not closed and trailing and remaining > 1e-9:
-                # Compute new trail candidate
                 cand = _trail_candidate(direction, i, t["trail_sl"], t.get("fill_idx", i)) \
                        if use_new else \
                        ((L[i] - trail_buf) if direction == "Bull" else (H[i] + trail_buf))
@@ -261,8 +320,13 @@ def simulate(
                     if cand is not None and cand > t["trail_sl"]:
                         t["trail_sl"] = cand
                     if L[i] <= t["trail_sl"]:
-                        r_exit = (t["trail_sl"] - entry) / risk
+                        # Market exit — apply slippage
+                        exit_px = min(t["trail_sl"] - slip, L[i])
+                        r_exit  = (exit_px - fill_entry) / risk
                         realized += remaining * r_exit
+                        risk_usd = min(equity * risk_pct, max_risk_usd)
+                        realized -= _commission_r(risk_usd)
+                        equity += realized * risk_usd
                         trades.append({**t, "result": "Win" if realized > 0 else "Loss",
                                        "pnl_r": realized, "exit_type": "Trail",
                                        "exit_idx": i})
@@ -271,34 +335,47 @@ def simulate(
                     if cand is not None and cand < t["trail_sl"]:
                         t["trail_sl"] = cand
                     if H[i] >= t["trail_sl"]:
-                        r_exit = (entry - t["trail_sl"]) / risk
+                        exit_px = max(t["trail_sl"] + slip, H[i])
+                        r_exit  = (fill_entry - exit_px) / risk
                         realized += remaining * r_exit
+                        risk_usd = min(equity * risk_pct, max_risk_usd)
+                        realized -= _commission_r(risk_usd)
+                        equity += realized * risk_usd
                         trades.append({**t, "result": "Win" if realized > 0 else "Loss",
                                        "pnl_r": realized, "exit_type": "Trail",
                                        "exit_idx": i})
                         closed = True
 
-            # 2.5) Break-even promotion — move SL to entry once MFE reaches be_at_r
+            # 2.5) Break-even promotion
             if not closed and remaining > 1e-9:
                 be_at_r = (t.get("meta") or {}).get("be_at_r")
                 if be_at_r and not t.get("be_promoted"):
-                    if direction == "Bull":
-                        mfe_r = (H[i] - entry) / risk
-                    else:
-                        mfe_r = (entry - L[i]) / risk
+                    mfe_r = (H[i] - fill_entry) / risk if direction == "Bull" else (fill_entry - L[i]) / risk
                     if mfe_r >= float(be_at_r):
-                        t["sl"] = entry              # SL → break-even
+                        t["sl"] = entry
                         t["be_promoted"] = True
 
-            # 3) Stop-loss / break-even exit
+            # 3) Stop-loss (with gap-adjusted fill and slippage)
             if not closed and remaining > 1e-9:
-                if direction == "Bull" and L[i] <= t["sl"] and not trailing and next_idx == 0:
-                    realized += remaining * -1.0
+                sl_price = t["sl"]
+                if direction == "Bull" and L[i] <= sl_price and not trailing and next_idx == 0:
+                    # Fill at worst of SL or current bar's action + slippage
+                    exit_px  = min(sl_price - slip, L[i])
+                    r_exit   = (exit_px - fill_entry) / risk
+                    realized += remaining * r_exit
+                    risk_usd = min(equity * risk_pct, max_risk_usd)
+                    realized -= _commission_r(risk_usd)
+                    equity += realized * risk_usd
                     trades.append({**t, "result": "Loss", "pnl_r": realized,
                                    "exit_type": "SL", "exit_idx": i})
                     closed = True
-                elif direction == "Bear" and H[i] >= t["sl"] and not trailing and next_idx == 0:
-                    realized += remaining * -1.0
+                elif direction == "Bear" and H[i] >= sl_price and not trailing and next_idx == 0:
+                    exit_px  = max(sl_price + slip, H[i])
+                    r_exit   = (fill_entry - exit_px) / risk
+                    realized += remaining * r_exit
+                    risk_usd = min(equity * risk_pct, max_risk_usd)
+                    realized -= _commission_r(risk_usd)
+                    equity += realized * risk_usd
                     trades.append({**t, "result": "Loss", "pnl_r": realized,
                                    "exit_type": "SL", "exit_idx": i})
                     closed = True
@@ -306,20 +383,31 @@ def simulate(
                     be_hit = (direction == "Bull" and L[i] <= entry) or \
                              (direction == "Bear" and H[i] >= entry)
                     if be_hit:
+                        risk_usd = min(equity * risk_pct, max_risk_usd)
+                        realized -= _commission_r(risk_usd)
+                        equity += realized * risk_usd
                         trades.append({**t, "result": "Win" if realized > 0 else "Loss",
                                        "pnl_r": realized, "exit_type": "BE",
                                        "exit_idx": i})
                         closed = True
 
-            # 4) Time exit — force close after N bars in trade
+            # 4) Time exit
             if not closed and remaining > 1e-9:
                 t_bars = (t.get("meta") or {}).get("time_exit_bars")
                 if t_bars and t.get("fill_idx") is not None:
                     if (i - t["fill_idx"]) >= int(t_bars):
-                        # Close at current bar's close
-                        from_px = float(df["C"].values[i])
-                        r_exit  = ((from_px - entry) / risk) if direction == "Bull" else ((entry - from_px) / risk)
+                        exit_px = C_arr[i]
+                        # Apply directional slippage on market close
+                        if direction == "Bull":
+                            exit_px -= slip
+                            r_exit = (exit_px - fill_entry) / risk
+                        else:
+                            exit_px += slip
+                            r_exit = (fill_entry - exit_px) / risk
                         realized += remaining * r_exit
+                        risk_usd = min(equity * risk_pct, max_risk_usd)
+                        realized -= _commission_r(risk_usd)
+                        equity += realized * risk_usd
                         trades.append({**t, "result": "Win" if realized > 0 else "Loss",
                                        "pnl_r": realized, "exit_type": "TimeExit",
                                        "exit_idx": i})
@@ -344,26 +432,50 @@ def simulate(
             for p in pending:
                 if len(active) + filled_this_bar >= max_concurrent:
                     new_pending.append(p); continue
-                entry = p["entry"]
-                if L[i] <= entry <= H[i]:
-                    # If new model + immediate trail, start trailing right at fill
+                entry     = p["entry"]
+                direction = p["direction"]
+                if direction == "Bull":
+                    _filled = O_arr[i] >= entry and L[i] <= entry
+                else:
+                    _filled = O_arr[i] <= entry and H[i] >= entry
+
+                if _filled:
+                    # Spread-adjusted fill price (widens effective risk)
+                    if direction == "Bull":
+                        fill_entry = entry + spread_h   # paid more for the buy
+                    else:
+                        fill_entry = entry - spread_h   # sold for less
+
+                    # Effective risk after spread (SL distance shrinks slightly)
+                    sl = p["sl"]
+                    eff_risk = abs(fill_entry - sl)
+                    if eff_risk < 1e-9:
+                        eff_risk = p["risk"]   # fallback
+
                     start_trailing = (use_new and trail_mode != "none"
                                       and trail_start == "immediate")
-                    init_trail_sl = p["sl"]
+                    init_trail_sl = sl
                     if start_trailing:
-                        c0 = _trail_candidate(p["direction"], i, p["sl"], i)
+                        c0 = _trail_candidate(direction, i, sl, i)
                         if c0 is not None:
-                            init_trail_sl = (max(p["sl"], c0)
-                                             if p["direction"] == "Bull"
-                                             else min(p["sl"], c0))
+                            init_trail_sl = (max(sl, c0) if direction == "Bull" else min(sl, c0))
+
+                    # Deduct commission on open leg
+                    risk_usd  = min(equity * risk_pct, max_risk_usd)
+                    open_comm = _commission_r(risk_usd) / 2   # open leg = half round-trip
+
                     active.append({**p,
+                        "fill_entry":  fill_entry,
+                        "risk":        eff_risk,
                         "next_tp_idx": 0,
                         "remaining":   1.0,
-                        "realized_r":  0.0,
+                        "realized_r":  -open_comm,   # open-leg commission drag
                         "trailing":    start_trailing,
                         "trail_sl":    init_trail_sl,
                         "last_tp_hit": 0,
                         "fill_idx":    i,
+                        "fill_date":   _bar_date(df, i),
+                        "last_date":   _bar_date(df, i),
                     })
                     filled_this_bar += 1
                 else:
@@ -373,6 +485,7 @@ def simulate(
     for p in pending:
         trades.append({**p, "result": "Unresolved", "pnl_r": 0.0,
                        "exit_type": "Unresolved", "last_tp_hit": -1,
-                       "fill_idx": None, "exit_idx": None})
+                       "fill_idx": None, "exit_idx": None,
+                       "fill_entry": p["entry"]})
 
     return pd.DataFrame(trades) if trades else pd.DataFrame()

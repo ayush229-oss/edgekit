@@ -505,6 +505,172 @@ def from_text(
         raise HTTPException(500, f"AI generation crashed: {type(e).__name__}: {str(e)[:300]}")
 
 
+# ─── Node-from-text: generate a single custom indicator node ─────────────────
+
+_NODE_FROM_TEXT_SYSTEM = """You are an expert quantitative trading developer building nodes for a visual strategy builder.
+
+The user describes a piece of strategy logic. You produce a UserNodeDef JSON for the most appropriate lane.
+
+LANES:
+  indicator  — computes a value/series from OHLCV. Outputs: number or series.
+  alpha      — generates Bull/Bear signals. Formula returns "Bull", "Bear", or None.
+  filter     — passes or blocks an incoming insight. Formula returns True (pass) or False (block).
+  sizing     — returns a risk fraction (e.g. 0.01 = 1% of equity). Formula returns float 0–1.
+  risk       — returns a stop-loss distance in pips. Formula returns positive float.
+  exit       — returns a target R multiple. Formula returns float (e.g. 3.0).
+
+OUTPUT SCHEMA:
+{
+  "label":        string,          // short display name
+  "description":  string,          // one sentence
+  "lane":         "indicator"|"alpha"|"filter"|"sizing"|"risk"|"exit",
+  "outputs": [                     // INDICATOR ONLY — omit for other lanes
+    {"name": string, "type": "series"|"number"}
+  ],
+  "extra_inputs": [                // additional wired number inputs (optional, any lane)
+    {"name": string, "type": "number"}
+  ],
+  "params_spec": [
+    {
+      "key": string,               // Python identifier
+      "label": string,
+      "type": "int"|"float",
+      "default": number,
+      "min": number,               // optional
+      "max": number                // optional
+    }
+  ],
+  "formulas": {
+    // indicator: one key per output port name → expression returning scalar or array
+    // all others: single key "main" → expression for the lane (see rules below)
+  }
+}
+
+FORMULA RULES — all lanes:
+- Variables: open, high, low, close, volume (np.ndarray), i (bar index), pip (float)
+- Modules: np (numpy), pd (pandas)
+- Builtins: abs, min, max, len, sum, round, int, float, bool, list, range, zip, enumerate
+- Params: each key available directly by name (e.g. `period`, not `params['period']`)
+- extra_inputs: each name available directly (e.g. `ema_value`, `rsi_value`)
+- Single expression only — no assignments, no multi-line, no imports
+
+FORMULA RULES — by lane:
+  indicator/series: returns np.ndarray of same length as close (full history, pre-computed once)
+  indicator/number: returns scalar — close[-1], high[-1] style
+  alpha/main:   returns "Bull", "Bear", or None
+    example: '"Bull" if close[-1] > pd.Series(close).rolling(period).mean().values[-1] else ("Bear" if close[-1] < pd.Series(close).rolling(period).mean().values[-1] else None)'
+  filter/main:  returns bool — True = pass insight, False = block
+    available extra: direction ("Bull"/"Bear"), confidence (float)
+    example: 'direction == "Bull" and close[-1] > pd.Series(close).rolling(20).mean().values[-1]'
+  sizing/main:  returns float 0–1 (risk fraction)
+    available extra: direction, confidence
+    example: 'min(0.02, confidence * 0.025)'
+  risk/main:    returns float (SL distance in pips, positive)
+    available extra: entry_px, direction
+    example: 'pd.Series(high - low).rolling(period).mean().values[-1] / pip * 1.5'
+  exit/main:    returns float (target R multiple, e.g. 3.0)
+    available extra: entry_px, direction
+    example: '3.0 if pd.Series(high - low).rolling(14).mean().values[-1] < pd.Series(high - low).rolling(50).mean().values[-1] else 2.0'
+
+Return ONLY the JSON object. No prose, no markdown fences.
+"""
+
+
+class NodeFromTextRequest(BaseModel):
+    description: str
+
+
+@router.post("/node-from-text")
+def node_from_text(
+    req:           NodeFromTextRequest,
+    request:       Request,
+    x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
+) -> Dict[str, Any]:
+    """
+    Generate a single user-defined indicator node from a plain-English description.
+    Returns a UserNodeDef JSON (label, outputs, params_spec, formulas).
+    """
+    import os, json as _json
+
+    provider = (x_ai_provider or _DEFAULT_PROVIDER).strip().lower()
+    api_key  = (x_ai_key or "").strip()
+    if not api_key and x_gemini_key:
+        api_key  = x_gemini_key.strip()
+        provider = "gemini"
+    if not api_key:
+        provider = _DEFAULT_PROVIDER if not x_ai_provider else provider
+        api_key  = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
+    if not api_key:
+        raise HTTPException(503, f"AI generation needs an API key. Add yours under Resources → AI Model.")
+
+    user_prompt = f"Create an indicator node for: {req.description}"
+
+    def _call(extra: str = "") -> str:
+        prompt = user_prompt + extra
+        try:
+            if provider == "gemini":
+                return _call_gemini(api_key, _NODE_FROM_TEXT_SYSTEM, prompt)
+            elif provider == "anthropic":
+                return _call_anthropic(api_key, _NODE_FROM_TEXT_SYSTEM, prompt)
+            elif provider in ("openai", "groq", "mistral"):
+                return _call_openai_compat(provider, api_key, _NODE_FROM_TEXT_SYSTEM, prompt)
+            else:
+                raise HTTPException(400, f"Unknown provider '{provider}'.")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _normalize_api_error(provider, str(e))
+
+    VALID_LANES = {"indicator", "alpha", "filter", "sizing", "risk", "exit"}
+
+    def _validate_node_def(d: Dict) -> None:
+        if not isinstance(d.get("label"), str) or not d["label"].strip():
+            raise ValueError("Missing label.")
+        lane = d.get("lane", "indicator")
+        if lane not in VALID_LANES:
+            raise ValueError(f"Invalid lane '{lane}'. Must be one of {sorted(VALID_LANES)}.")
+        if not isinstance(d.get("formulas"), dict) or not d["formulas"]:
+            raise ValueError("formulas must be a non-empty object.")
+        if lane == "indicator":
+            outputs = d.get("outputs", [])
+            if not outputs:
+                raise ValueError("indicator nodes must have at least one output.")
+            for o in outputs:
+                if o.get("type") not in ("series", "number"):
+                    raise ValueError(f"Output type must be 'series' or 'number', got: {o.get('type')}")
+                if not d["formulas"].get(o["name"]):
+                    raise ValueError(f"Missing formula for output '{o['name']}'.")
+        else:
+            # Non-indicator: must have a "main" formula
+            if not d["formulas"].get("main"):
+                raise ValueError(f"{lane} node must have a 'main' formula.")
+
+    try:
+        raw = _call()
+    except HTTPException:
+        raise
+
+    try:
+        node_def = _json.loads(_coerce_json_text(raw))
+        _validate_node_def(node_def)
+    except Exception as e:
+        try:
+            raw2     = _call(f"\n\nYour previous attempt failed validation: {e}\nFix it and return the corrected JSON.")
+            node_def = _json.loads(_coerce_json_text(raw2))
+            _validate_node_def(node_def)
+        except Exception as e2:
+            raise HTTPException(422, f"AI produced an invalid node definition: {e2}")
+
+    node_def.setdefault("description", req.description[:140])
+    node_def.setdefault("lane", "indicator")
+    node_def.setdefault("params_spec", [])
+    node_def.setdefault("extra_inputs", [])
+    node_def.setdefault("outputs", [] if node_def.get("lane") != "indicator" else node_def.get("outputs", []))
+    return node_def
+
+
 # ── Per-provider env var fallbacks ──────────────────────────────────────────
 _PROVIDER_ENV: Dict[str, str] = {
     "gemini":    "GEMINI_API_KEY",
@@ -1332,9 +1498,13 @@ class GraphBacktestV2Request(BaseModel):
     timeframe:        str  = "M15"
     n_bars:           int  = 5000
     csv_data_id:      Optional[str] = None
-    # Trade management — passed straight through to the simulator. (Exit nodes
-    # in the graph also set these, but request-level lets the user override
-    # without editing the graph.)
+    # Execution costs
+    spread_pips:      float = 0.0
+    commission:       float = 0.0
+    slippage_pips:    float = 0.0
+    swap_long_pips:   float = 0.0
+    swap_short_pips:  float = 0.0
+    # Trade management
     target_r:         Optional[float] = 3.0
     target_close_pct: float           = 0.5
     trail_mode:       Literal["none", "candle", "atr", "pips", "swing"] = "candle"
@@ -1347,6 +1517,334 @@ class GraphBacktestV2Request(BaseModel):
     order_expiry:     Optional[int] = None
     session_hours:    Optional[Tuple[int, int]] = None
     challenge:        Optional[ChallengeParams] = None
+
+
+# ─── Parameter Sweep ─────────────────────────────────────────────────────────
+
+class SweepParamRange(BaseModel):
+    node_id:  str
+    param_key: str
+    values:   List[Any]   # discrete list of values to try
+
+
+class SweepRequest(BaseModel):
+    graph:       Dict[str, Any]
+    param_ranges: List[SweepParamRange]
+    data_source:  Literal["mt5", "upload"] = "mt5"
+    symbol:       str  = "XAUUSD"
+    timeframe:    str  = "M15"
+    n_bars:       int  = 5000
+    csv_data_id:  Optional[str] = None
+    target_r:     Optional[float] = 3.0
+    trail_mode:   str  = "none"
+    trail_params: Dict[str, Any] = Field(default_factory=dict)
+    pip:          float = 0.10
+    spread_pips:  float = 0.0
+    commission:   float = 0.0
+    slippage_pips: float = 0.0
+
+
+class SweepResult(BaseModel):
+    params:       Dict[str, Any]
+    trades:       int
+    wr:           float
+    total_r:      float
+    profit_factor: float
+    max_dd:       float
+    sharpe:       Optional[float] = None
+    sortino:      Optional[float] = None
+
+
+@router.post("/sweep")
+def param_sweep(
+    req: SweepRequest,
+    x_dev_user:    Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """
+    Grid-search over discrete parameter values. Returns a ranked results table.
+    All combinations of param_ranges.values are tried; max 200 combinations.
+    """
+    import itertools
+    from backend.engine.core.data_loader import load_mt5
+    from backend.api import store
+
+    # Load data once
+    if req.data_source == "mt5":
+        df = load_mt5(req.symbol, req.timeframe, req.n_bars)
+    elif req.data_source == "upload" and req.csv_data_id:
+        df = store.get(req.csv_data_id)
+        if df is None:
+            raise HTTPException(404, f"data_id {req.csv_data_id} not found")
+    else:
+        raise HTTPException(400, "data_source must be 'mt5' or 'upload' with csv_data_id")
+
+    pip = infer_pip_from_df(df, req.symbol)
+    base_graph = dict(req.graph)
+
+    # Build all combinations
+    keys    = [(r.node_id, r.param_key) for r in req.param_ranges]
+    values  = [r.values for r in req.param_ranges]
+    combos  = list(itertools.product(*values))
+    if len(combos) > 200:
+        raise HTTPException(400, f"Too many combinations ({len(combos)}). Max 200 — reduce param ranges.")
+
+    results = []
+    for combo in combos:
+        # Deep-copy the graph and patch params
+        import copy, json as _json
+        g = _json.loads(_json.dumps(base_graph))
+        param_label: Dict[str, Any] = {}
+        for (node_id, param_key), val in zip(keys, combo):
+            param_label[f"{node_id}.{param_key}"] = val
+            for n in g.get("nodes", []):
+                if n["id"] == node_id:
+                    n.setdefault("params", {})[param_key] = val
+        try:
+            validated = validate_graph(g)
+            strategy  = GraphV2Strategy(validated)
+            setups    = strategy.detect(df, {"pip": pip})
+            tdf = simulate(
+                df, setups,
+                target_r      = req.target_r,
+                trail_mode    = req.trail_mode,
+                trail_params  = req.trail_params,
+                pip           = pip,
+                spread_pips   = req.spread_pips,
+                commission    = req.commission,
+                slippage_pips = req.slippage_pips,
+            )
+            m = compute_metrics(tdf)
+            if m is None:
+                continue
+            def _safe(v):
+                return None if (v is None or (isinstance(v, float) and v != v)) else float(v)
+            results.append({
+                "params":       param_label,
+                "trades":       m["trades"],
+                "wr":           round(m["wr"], 1),
+                "total_r":      round(m["total_r"], 2),
+                "profit_factor": round(min(m["profit_factor"], 99.0), 2),
+                "max_dd":       round(m["max_dd"], 2),
+                "sharpe":       _safe(m.get("sharpe")),
+                "sortino":      _safe(m.get("sortino")),
+            })
+        except Exception:
+            continue   # skip invalid combos silently
+
+    # Sort by Sharpe if available, else profit_factor
+    results.sort(key=lambda r: (r.get("sharpe") or 0, r["profit_factor"]), reverse=True)
+    return {"results": results, "combinations_tried": len(combos)}
+
+
+# ─── Walk-forward & Monte Carlo ───────────────────────────────────────────────
+
+class WalkForwardRequest(BaseModel):
+    graph:        Dict[str, Any]
+    data_source:  Literal["mt5", "upload"] = "mt5"
+    symbol:       str  = "XAUUSD"
+    timeframe:    str  = "M15"
+    n_bars:       int  = 5000
+    csv_data_id:  Optional[str] = None
+    n_splits:     int  = 5     # number of in/out-of-sample windows
+    is_pct:       float = 0.7  # fraction of each window used for in-sample
+    target_r:     Optional[float] = 3.0
+    trail_mode:   str  = "none"
+    trail_params: Dict[str, Any] = Field(default_factory=dict)
+    spread_pips:  float = 0.0
+    commission:   float = 0.0
+    slippage_pips: float = 0.0
+
+
+@router.post("/walk-forward")
+def walk_forward(
+    req: WalkForwardRequest,
+    x_dev_user:    Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """
+    Rolling walk-forward test. Splits data into N windows; for each window
+    runs a backtest on the out-of-sample portion. Returns per-window metrics
+    and an aggregate OOS equity curve.
+    """
+    from backend.engine.core.data_loader import load_mt5
+    from backend.api import store
+
+    if req.data_source == "mt5":
+        df = load_mt5(req.symbol, req.timeframe, req.n_bars)
+    elif req.data_source == "upload" and req.csv_data_id:
+        df = store.get(req.csv_data_id)
+        if df is None:
+            raise HTTPException(404, f"data_id {req.csv_data_id} not found")
+    else:
+        raise HTTPException(400, "Bad data_source")
+
+    pip = infer_pip_from_df(df, req.symbol)
+    n   = len(df)
+    window_size = n // req.n_splits
+    if window_size < 100:
+        raise HTTPException(400, "Not enough bars per window — increase n_bars or reduce n_splits.")
+
+    try:
+        validated = validate_graph(req.graph)
+        strategy  = GraphV2Strategy(validated)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+    windows = []
+    oos_equity = [100.0]   # track OOS equity cumulatively
+
+    for split in range(req.n_splits):
+        start = split * window_size
+        end   = start + window_size
+        is_end = start + int(window_size * req.is_pct)
+        oos_df = df.iloc[is_end:end].reset_index(drop=True)
+        if len(oos_df) < 20:
+            continue
+        try:
+            setups = strategy.detect(oos_df, {"pip": pip})
+            tdf = simulate(
+                oos_df, setups,
+                target_r      = req.target_r,
+                trail_mode    = req.trail_mode,
+                trail_params  = req.trail_params,
+                pip           = pip,
+                spread_pips   = req.spread_pips,
+                commission    = req.commission,
+                slippage_pips = req.slippage_pips,
+            )
+            m = compute_metrics(tdf, initial_equity=oos_equity[-1])
+            if m is None:
+                windows.append({"split": split + 1, "trades": 0, "oos_bars": len(oos_df),
+                                 "start": str(oos_df["time"].iloc[0].date()),
+                                 "end":   str(oos_df["time"].iloc[-1].date())})
+                continue
+            oos_equity.append(float(m["final_equity"]))
+            windows.append({
+                "split":    split + 1,
+                "start":    str(oos_df["time"].iloc[0].date()),
+                "end":      str(oos_df["time"].iloc[-1].date()),
+                "oos_bars": len(oos_df),
+                "trades":   m["trades"],
+                "wr":       round(m["wr"], 1),
+                "total_r":  round(m["total_r"], 2),
+                "max_dd":   round(m["max_dd"], 2),
+                "pf":       round(min(m["profit_factor"], 99.0), 2),
+            })
+        except Exception:
+            continue
+
+    return {
+        "windows":     windows,
+        "oos_equity":  oos_equity,
+        "n_splits":    req.n_splits,
+    }
+
+
+class MonteCarloRequest(BaseModel):
+    graph:        Dict[str, Any]
+    data_source:  Literal["mt5", "upload"] = "mt5"
+    symbol:       str  = "XAUUSD"
+    timeframe:    str  = "M15"
+    n_bars:       int  = 5000
+    csv_data_id:  Optional[str] = None
+    n_sims:       int  = 200   # number of Monte Carlo runs
+    target_r:     Optional[float] = 3.0
+    trail_mode:   str  = "none"
+    trail_params: Dict[str, Any] = Field(default_factory=dict)
+    spread_pips:  float = 0.0
+    commission:   float = 0.0
+    slippage_pips: float = 0.0
+
+
+@router.post("/monte-carlo")
+def monte_carlo(
+    req: MonteCarloRequest,
+    x_dev_user:    Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """
+    Monte Carlo simulation: shuffle the detected trade PnL sequence N times
+    and compute equity curve percentile bands (p5, p25, p50, p75, p95).
+    """
+    import numpy as np
+    from backend.engine.core.data_loader import load_mt5
+    from backend.api import store
+
+    if req.data_source == "mt5":
+        df = load_mt5(req.symbol, req.timeframe, req.n_bars)
+    elif req.data_source == "upload" and req.csv_data_id:
+        df = store.get(req.csv_data_id)
+        if df is None:
+            raise HTTPException(404, f"data_id {req.csv_data_id} not found")
+    else:
+        raise HTTPException(400, "Bad data_source")
+
+    pip = infer_pip_from_df(df, req.symbol)
+
+    try:
+        validated = validate_graph(req.graph)
+        strategy  = GraphV2Strategy(validated)
+        setups    = strategy.detect(df, {"pip": pip})
+        tdf = simulate(
+            df, setups,
+            target_r      = req.target_r,
+            trail_mode    = req.trail_mode,
+            trail_params  = req.trail_params,
+            pip           = pip,
+            spread_pips   = req.spread_pips,
+            commission    = req.commission,
+            slippage_pips = req.slippage_pips,
+        )
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+    if tdf is None or tdf.empty:
+        raise HTTPException(422, "No trades detected.")
+
+    res = tdf[tdf["result"] != "Unresolved"]
+    if len(res) < 5:
+        raise HTTPException(422, "Need at least 5 resolved trades for Monte Carlo.")
+
+    pnl = res["pnl_r"].values
+    n_sims = min(req.n_sims, 1000)
+
+    curves = []
+    rng = np.random.default_rng(42)
+    risk_pct_mc = 0.02   # fixed 2% per trade for MC — exaggerates path dependency
+    for _ in range(n_sims):
+        shuffled = rng.permutation(pnl)
+        eq = 100.0
+        curve = [eq]
+        for r in shuffled:
+            # Compound: risk fraction of current equity, so order matters
+            eq = max(0.01, eq + r * eq * risk_pct_mc)
+            curve.append(eq)
+        curves.append(curve)
+
+    # Pad all curves to same length
+    max_len = max(len(c) for c in curves)
+    padded  = np.array([c + [c[-1]] * (max_len - len(c)) for c in curves])
+
+    percentiles = {
+        "p5":  np.percentile(padded, 5,  axis=0).tolist(),
+        "p25": np.percentile(padded, 25, axis=0).tolist(),
+        "p50": np.percentile(padded, 50, axis=0).tolist(),
+        "p75": np.percentile(padded, 75, axis=0).tolist(),
+        "p95": np.percentile(padded, 95, axis=0).tolist(),
+    }
+
+    m = compute_metrics(res)
+    return {
+        "n_sims":      n_sims,
+        "n_trades":    len(pnl),
+        "percentiles": percentiles,
+        "base_metrics": {
+            "total_r":  round(float(pnl.sum()), 2),
+            "max_dd":   round(float(m["max_dd"]), 2) if m else None,
+            "wr":       round(float(m["wr"]), 1) if m else None,
+        },
+    }
 
 
 @router.post("/backtest", response_model=BacktestResponse)
@@ -1419,6 +1917,14 @@ def run_v2_backtest(
         order_expiry     = req.order_expiry,
         session_hours    = req.session_hours,
         pip              = pip,
+        spread_pips      = req.spread_pips,
+        commission       = req.commission,
+        slippage_pips    = req.slippage_pips,
+        swap_long_pips   = req.swap_long_pips,
+        swap_short_pips  = req.swap_short_pips,
+        risk_pct         = req.risk_pct,
+        initial_equity   = req.initial_equity,
+        max_risk_usd     = req.max_risk_usd,
     )
     m = compute_metrics(tdf,
                        initial_equity = req.initial_equity,
@@ -1478,6 +1984,11 @@ def run_v2_backtest(
             max_dd        = m["max_dd"],
             avg_win       = m["avg_win"],
             avg_loss      = m["avg_loss"],
+            avg_rr        = m.get("avg_rr") or 0.0,
+            sharpe        = (m.get("sharpe") if m.get("sharpe") and not (isinstance(m.get("sharpe"), float) and (m["sharpe"] != m["sharpe"])) else None),
+            sortino       = (m.get("sortino") if m.get("sortino") and not (isinstance(m.get("sortino"), float) and (m["sortino"] != m["sortino"])) else None),
+            calmar        = (m.get("calmar") if m.get("calmar") and not (isinstance(m.get("calmar"), float) and (m["calmar"] != m["calmar"])) else None),
+            cagr          = (m.get("cagr") if m.get("cagr") and not (isinstance(m.get("cagr"), float) and (m["cagr"] != m["cagr"])) else None),
             final_equity  = m["final_equity"],
             n_setups      = m["n_setups"],
             n_unresolved  = m["n_unresolved"],

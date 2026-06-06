@@ -13,11 +13,19 @@ def compute_metrics(
     initial_equity: float = 100.0,
     risk_pct: float = 0.01,
     max_risk_usd: float = 600.0,
+    bars_per_year: float = 252.0,   # trading days; used for annualised ratios
 ) -> Optional[Dict[str, Any]]:
     """
     Compute headline + supporting metrics for a trade log.
 
     Returns None when the log has no resolved trades.
+
+    Metrics returned
+    ----------------
+    trades, wr, ev, total_r, max_dd, profit_factor,
+    avg_win, avg_loss, avg_rr, final_equity,
+    sharpe, sortino, calmar, cagr,
+    curve, pnl, exit_counts, n_setups, n_unresolved
     """
     if tdf is None or tdf.empty:
         return None
@@ -31,7 +39,10 @@ def compute_metrics(
     wr     = len(wins) / len(pnl) * 100.0
     ev     = float(np.mean(pnl))
     total  = float(np.sum(pnl))
+    avg_rr = (float(abs(wins.mean()) / abs(losses.mean()))
+              if len(wins) and len(losses) and losses.mean() != 0 else float("nan"))
 
+    # ── Equity curve ─────────────────────────────────────────────────────
     eq    = initial_equity
     curve = [eq]
     for r in pnl:
@@ -44,8 +55,45 @@ def compute_metrics(
     dd_pct = (curve - peak) / peak * 100.0
     max_dd = float(dd_pct.min())
 
-    pf = (abs(wins.sum() / losses.sum())
+    pf = (abs(float(wins.sum()) / float(losses.sum()))
           if len(losses) and losses.sum() != 0 else float("inf"))
+
+    # ── Period returns (per-trade equity returns) ─────────────────────────
+    rets = np.diff(curve) / curve[:-1]   # per-trade % returns
+
+    # ── Sharpe ratio (annualised, using trade count as frequency proxy) ───
+    if len(rets) > 1 and rets.std() > 0:
+        trades_per_year = max(len(rets), 1)
+        scale = np.sqrt(trades_per_year)   # annualise by trade count
+        sharpe = float(rets.mean() / rets.std() * scale)
+    else:
+        sharpe = float("nan")
+
+    # ── Sortino ratio (downside deviation only) ───────────────────────────
+    down = rets[rets < 0]
+    if len(down) > 1 and down.std() > 0:
+        sortino = float(rets.mean() / down.std() * np.sqrt(max(len(rets), 1)))
+    else:
+        sortino = float("nan")
+
+    # ── CAGR (use fill/exit timestamps when available, else trade count) ──
+    cagr = float("nan")
+    try:
+        if "fill_idx" in res.columns and "exit_idx" in res.columns:
+            first_fill = res["fill_idx"].dropna().min()
+            last_exit  = res["exit_idx"].dropna().max()
+            if pd.notna(first_fill) and pd.notna(last_exit):
+                span_bars = float(last_exit) - float(first_fill)
+                if span_bars > 0:
+                    years = span_bars / bars_per_year
+                    cagr  = float((curve[-1] / curve[0]) ** (1.0 / years) - 1) * 100
+    except Exception:
+        pass
+
+    # ── Calmar ratio = CAGR / |MaxDD| ────────────────────────────────────
+    calmar = float("nan")
+    if not np.isnan(cagr) and max_dd < 0:
+        calmar = cagr / abs(max_dd)
 
     exit_counts = (res["exit_type"].value_counts().to_dict()
                    if "exit_type" in res.columns else {})
@@ -59,6 +107,11 @@ def compute_metrics(
         profit_factor = pf,
         avg_win       = float(wins.mean())   if len(wins)   else 0.0,
         avg_loss      = float(losses.mean()) if len(losses) else 0.0,
+        avg_rr        = avg_rr,
+        sharpe        = sharpe,
+        sortino       = sortino,
+        calmar        = calmar,
+        cagr          = cagr,
         final_equity  = float(curve[-1]),
         curve         = curve,
         pnl           = pnl,

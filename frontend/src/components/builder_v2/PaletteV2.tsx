@@ -14,25 +14,38 @@ import {
   listCustomNodes, deleteCustomNode, onCustomNodesChange,
   type CustomNode,
 } from "@/lib/customNodes";
+import {
+  listUserNodes, deleteUserNode, onUserNodesChange, toV2NodeSpec,
+  type UserNodeDef,
+} from "@/lib/userNodes";
 
 
 export function PaletteV2({
-  library, onAdd, onAddCustomNode, onOpenCustomNodeBuilder, minimized, onToggleMinimized,
+  library, onAdd, onAddCustomNode, onOpenCustomNodeBuilder,
+  onAddUserNode, onOpenUserNodeBuilder,
+  minimized, onToggleMinimized,
 }: {
   library:                  V2NodeSpec[];
   onAdd:                    (spec: V2NodeSpec) => void;
   onAddCustomNode:          (cn: CustomNode) => void;
   onOpenCustomNodeBuilder:  () => void;
+  onAddUserNode:            (def: UserNodeDef) => void;
+  onOpenUserNodeBuilder:    () => void;
   minimized:                boolean;
   onToggleMinimized:        () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  // Reactive list of saved custom nodes (re-renders when localStorage changes).
   const [customNodes, setCustomNodes] = useState<CustomNode[]>([]);
   useEffect(() => {
     setCustomNodes(listCustomNodes());
     return onCustomNodesChange(() => setCustomNodes(listCustomNodes()));
+  }, []);
+
+  const [userNodes, setUserNodes] = useState<UserNodeDef[]>([]);
+  useEffect(() => {
+    setUserNodes(listUserNodes());
+    return onUserNodesChange(() => setUserNodes(listUserNodes()));
   }, []);
 
   const lanes = (Object.keys(LANE_META) as V2Lane[])
@@ -134,6 +147,68 @@ export function PaletteV2({
         {customNodes.length === 0 && (
           <p className="px-4 pb-3 text-[10px] text-muted italic leading-snug">
             Describe a piece of logic, get back a reusable node. Lives in your browser only.
+          </p>
+        )}
+      </div>
+
+      {/* ── My Custom Nodes (user-built, any lane) ───────────────────── */}
+      <div className="border-b border-border bg-ink/[0.02]">
+        <div className="px-4 pt-3 pb-2 flex items-center gap-2">
+          <span className="w-1.5 h-3 rounded-sm bg-muted" />
+          <span className="text-xs uppercase tracking-widest text-muted flex-1">My Custom Nodes</span>
+          <span className="text-[10px] text-muted">{userNodes.length}</span>
+        </div>
+
+        <button
+          onClick={onOpenUserNodeBuilder}
+          className="w-full px-4 py-2 text-left text-[12px] text-muted hover:bg-cream/60 transition-colors
+                     flex items-center gap-1.5 font-medium"
+        >
+          <span className="text-sm leading-none">✨</span>
+          Create with AI…
+        </button>
+
+        {userNodes.length > 0 && (
+          <ul className="pb-1">
+            {userNodes.map((un) => (
+              <li key={un.id} className="group">
+                <div className="flex items-stretch hover:bg-cream transition-colors">
+                  <button
+                    onClick={() => onAddUserNode(un)}
+                    className="flex-1 text-left px-4 py-2"
+                    title={un.description || un.label}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-sm font-medium leading-tight">{un.label}</div>
+                    </div>
+                    {un.description && (
+                      <div className="text-[10px] text-muted leading-snug mt-0.5 line-clamp-1">
+                        {un.description}
+                      </div>
+                    )}
+                    <div className="text-[9px] text-muted mt-0.5 font-mono uppercase tracking-wide">
+                      {un.lane}
+                    </div>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`Delete "${un.label}"?`)) deleteUserNode(un.id);
+                    }}
+                    title="Delete"
+                    className="px-2 text-muted hover:text-down opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    ×
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {userNodes.length === 0 && (
+          <p className="px-4 pb-3 text-[10px] text-muted italic leading-snug">
+            Build any node — indicator, signal, filter, sizing, risk, or exit logic.
           </p>
         )}
       </div>

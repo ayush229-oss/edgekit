@@ -73,16 +73,36 @@ const CustomNodeBuilder = nextDynamic(
   () => import("@/components/builder_v2/CustomNodeBuilder").then((m) => ({ default: m.CustomNodeBuilder })),
   { ssr: false }
 );
+const UserNodeBuilder = nextDynamic(
+  () => import("@/components/builder_v2/UserNodeBuilder").then((m) => ({ default: m.UserNodeBuilder })),
+  { ssr: false }
+);
 
 import type { CustomNode } from "@/lib/customNodes";
+import { toV2NodeSpec, type UserNodeDef } from "@/lib/userNodes";
+import { loadSettings } from "@/app/(app)/settings/page";
+import { LogoMark } from "@/components/LogoMark";
 
 
 const nodeTypes = { v2Node: NodeCardV2 };
 
 
 // ── Graph ↔ React Flow conversion ──────────────────────────────────────────
-function graphToRF(graph: V2Graph, library: V2NodeSpec[]): { nodes: Node[]; edges: Edge[] } {
-  const specByType = Object.fromEntries(library.map((s) => [s.type, s]));
+function graphToRF(
+  graph: V2Graph,
+  library: V2NodeSpec[],
+  extraSpecs: Record<string, V2NodeSpec> = {},
+): { nodes: Node[]; edges: Edge[] } {
+  const specByType: Record<string, V2NodeSpec> = {
+    ...Object.fromEntries(library.map((s) => [s.type, s])),
+    ...extraSpecs,
+  };
+  // Synthesize specs for any user-defined nodes embedded in the graph
+  for (const udef of graph.user_defs ?? []) {
+    if (!specByType[udef.type]) {
+      specByType[udef.type] = toV2NodeSpec(udef as unknown as UserNodeDef);
+    }
+  }
   return {
     nodes: graph.nodes.map((n, idx) => ({
       id:       n.id,
@@ -102,7 +122,16 @@ function graphToRF(graph: V2Graph, library: V2NodeSpec[]): { nodes: Node[]; edge
   };
 }
 
-function rfToGraph(nodes: Node[], edges: Edge[], name: string): V2Graph {
+function rfToGraph(
+  nodes: Node[],
+  edges: Edge[],
+  name: string,
+  userDefs?: Record<string, UserNodeDef>,
+): V2Graph {
+  const presentTypes = new Set(nodes.map((n) => (n.data as any).spec?.type ?? ""));
+  const user_defs = userDefs
+    ? Object.values(userDefs).filter((d) => presentTypes.has(d.type))
+    : [];
   return {
     name,
     nodes: nodes.map((n) => ({
@@ -117,6 +146,7 @@ function rfToGraph(nodes: Node[], edges: Edge[], name: string): V2Graph {
       from_port: e.sourceHandle ?? "",
       to_port:   e.targetHandle ?? "",
     })),
+    ...(user_defs.length > 0 && { user_defs: user_defs as any }),
   };
 }
 
@@ -138,7 +168,9 @@ function BuilderInner() {
   const [descOpen,   setDescOpen]   = useState(false);
   const [pineOpen,   setPineOpen]   = useState(false);
   const [chartOpen,  setChartOpen]  = useState(false);
-  const [customNodeOpen, setCustomNodeOpen] = useState(false);
+  const [customNodeOpen,   setCustomNodeOpen]   = useState(false);
+  const [userNodeOpen,     setUserNodeOpen]     = useState(false);
+  const [userNodeDefs,     setUserNodeDefs]     = useState<Record<string, UserNodeDef>>({});
   const [paletteMin, setPaletteMin] = useState(false);
   const [navOpen,    setNavOpen]    = useState(false);   // builder page-nav menu
   const [varsOpen,   setVarsOpen]   = useState(false);   // variables (nodes) dropdown
@@ -164,9 +196,10 @@ function BuilderInner() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const bootstrappedRef = useRef(false);   // gates autosave until initial load/restore done
 
-  const [tf,     setTf]     = useState("M15");
-  const [symbol, setSymbol] = useState("XAUUSD");
-  const [bars,   setBars]   = useState(5000);
+  const _settings = typeof window !== "undefined" ? loadSettings() : null;
+  const [tf,     setTf]     = useState(_settings?.default_tf     ?? "M15");
+  const [symbol, setSymbol] = useState(_settings?.default_symbol ?? "XAUUSD");
+  const [bars,   setBars]   = useState(_settings?.default_bars   ?? 5000);
   const [symbols,    setSymbols]    = useState<SymbolInfo[]>([]);
   const [symbolSource, setSymbolSource] = useState<"mt5" | "static">("static");
   const [busy, setBusy] = useState(false);
@@ -219,9 +252,7 @@ function BuilderInner() {
       fetch(`/api/saved-strategies/${savedParam}`)
         .then((r) => r.ok ? r.json() : Promise.reject(`${r.status}`))
         .then((data) => {
-          const rf = graphToRF(data.graph as V2Graph, library);
-          setName(data.name);
-          setNodes(rf.nodes); setEdges(rf.edges); setSelectedId(null);
+          applyGraph(data.graph as V2Graph, data.name);
           setShowPicker(false);
           setSavedStratId(data.id);
           if (data.symbol)    setSymbol(data.symbol);
@@ -244,9 +275,7 @@ function BuilderInner() {
         const d = JSON.parse(raw);
         if (d?.graph?.nodes?.length) {
           setAutoLoaded(true);
-          const rf = graphToRF(d.graph as V2Graph, library);
-          setName(d.name || d.graph.name || "Untitled strategy");
-          setNodes(rf.nodes); setEdges(rf.edges); setSelectedId(null);
+          applyGraph(d.graph as V2Graph, d.name || d.graph.name || "Untitled strategy");
           setShowPicker(false);
           if (d.symbol) setSymbol(d.symbol);
           if (d.tf)     setTf(d.tf);
@@ -261,7 +290,7 @@ function BuilderInner() {
     const t = setTimeout(() => {
       try {
         if (nodes.length === 0) { window.localStorage.removeItem(DRAFT_KEY); return; }
-        const draft = { name, symbol, tf, graph: rfToGraph(nodes, edges, name) };
+        const draft = { name, symbol, tf, graph: rfToGraph(nodes, edges, name, userNodeDefs) };
         window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
       } catch { /* quota or serialization issue — ignore */ }
     }, 600);
@@ -271,7 +300,7 @@ function BuilderInner() {
   // ── Recompute complexity whenever the graph changes ────────────────────
   useEffect(() => {
     if (nodes.length === 0) { setComplex(null); return; }
-    const g = rfToGraph(nodes, edges, name);
+    const g = rfToGraph(nodes, edges, name, userNodeDefs);
     v2Complexity(g).then(setComplex).catch(() => setComplex(null));
   }, [nodes, edges]);     // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -309,9 +338,8 @@ function BuilderInner() {
     }
     try {
       const g  = await v2GetTemplate(id);
-      const rf = graphToRF(g, library);
-      setName(g.name); setNodes(rf.nodes); setEdges(rf.edges);
-      setSelectedId(null); setShowPicker(false);
+      applyGraph(g, g.name);
+      setShowPicker(false);
       // Sync top-bar symbol + timeframe from the template's universe node
       const univ = g.nodes.find((n) => n.type === "universe.single_asset");
       if (univ) {
@@ -321,10 +349,19 @@ function BuilderInner() {
     } catch (e: any) { setErr(e.message ?? String(e)); }
   }
 
-  function loadGraphFromDescriber(g: V2Graph, n: string) {
+  // Load any graph and register user defs it carries.
+  function applyGraph(g: V2Graph, n: string) {
+    const udefs: Record<string, UserNodeDef> = {};
+    for (const udef of g.user_defs ?? []) {
+      udefs[(udef as any).type] = udef as unknown as UserNodeDef;
+    }
+    if (Object.keys(udefs).length > 0) setUserNodeDefs((prev) => ({ ...prev, ...udefs }));
     const rf = graphToRF(g, library);
-    setName(n); setNodes(rf.nodes); setEdges(rf.edges);
-    setSelectedId(null);
+    setName(n); setNodes(rf.nodes); setEdges(rf.edges); setSelectedId(null);
+  }
+
+  function loadGraphFromDescriber(g: V2Graph, n: string) {
+    applyGraph(g, n);
   }
 
 
@@ -351,6 +388,13 @@ function BuilderInner() {
       },
     ]);
     setSelectedId(id);
+  }
+
+  // ── Add a user-defined formula node ─────────────────────────────────
+  function addUserNode(def: UserNodeDef) {
+    const spec = toV2NodeSpec(def);
+    setUserNodeDefs((prev) => ({ ...prev, [def.type]: def }));
+    addNodeFromPalette(spec);
   }
 
   // ── Add a saved custom node — inlines its sub-graph onto the canvas ──
@@ -573,7 +617,7 @@ function BuilderInner() {
           bars,
           metrics:       result.metrics,
           equity_curve:  result.equity_curve,
-          graph:         rfToGraph(nodes, edges, name),
+          graph:         rfToGraph(nodes, edges, name, userNodeDefs),
         }),
       });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -595,7 +639,7 @@ function BuilderInner() {
       const res    = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: stratName, graph: rfToGraph(nodes, edges, stratName), symbol, timeframe: tf }),
+        body: JSON.stringify({ name: stratName, graph: rfToGraph(nodes, edges, stratName, userNodeDefs), symbol, timeframe: tf }),
       });
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
@@ -614,7 +658,7 @@ function BuilderInner() {
     setFwdMsg(mode === "live_demo" ? "Starting live demo test…" : "Starting…");
     try {
       await forwardStart({
-        graph: rfToGraph(nodes, edges, name),
+        graph: rfToGraph(nodes, edges, name, userNodeDefs),
         name, symbol, timeframe: tf, mode,
         mgmt: {
           target_r:         mgmt.target_r,
@@ -637,7 +681,8 @@ function BuilderInner() {
   async function run() {
     setBusy(true); setErr(null);
     try {
-      const graph = rfToGraph(nodes, edges, name);
+      const graph = rfToGraph(nodes, edges, name, userNodeDefs);
+      const _s = loadSettings();
       const res = await v2RunBacktest({
         graph,
         data_source:      "mt5",
@@ -650,6 +695,16 @@ function BuilderInner() {
         trail_start:      mgmt.trail_start,
         trail_params:     mgmt.trail_params,
         challenge:        challengeEnabled ? challengeParams : undefined,
+        // Execution costs from user settings
+        spread_pips:      _s.spread_pips,
+        commission:       _s.commission,
+        slippage_pips:    _s.slippage_pips,
+        swap_long_pips:   _s.swap_long_pips,
+        swap_short_pips:  _s.swap_short_pips,
+        initial_equity:   100.0,
+        risk_pct:         _s.risk_pct,
+        max_risk_usd:     _s.max_risk_usd,
+        max_concurrent:   _s.max_concurrent,
       });
       setResult(res);
       setStale(false);
@@ -782,7 +837,7 @@ function BuilderInner() {
         onLoadGraph={loadGraphFromDescriber}
         symbol={symbol}
         timeframe={tf}
-        currentGraph={nodes.length > 0 ? rfToGraph(nodes, edges, name) : null}
+        currentGraph={nodes.length > 0 ? rfToGraph(nodes, edges, name, userNodeDefs) : null}
         resultSummary={result
           ? `${result.metrics.trades} trades, ${result.metrics.wr.toFixed(0)}% win rate, ${result.metrics.total_r >= 0 ? "+" : ""}${result.metrics.total_r.toFixed(1)}R`
           : null}
@@ -796,11 +851,18 @@ function BuilderInner() {
         timeframe={tf}
       />
 
+      {/* ── Formula node builder modal ──────────────────────────────── */}
+      <UserNodeBuilder
+        open={userNodeOpen}
+        onClose={() => setUserNodeOpen(false)}
+        onCreated={(def) => addUserNode(def)}
+      />
+
       {/* ── Pine Script export modal ───────────────────────────────── */}
       <PineExportModal
         open={pineOpen}
         onClose={() => setPineOpen(false)}
-        graph={nodes.length > 0 ? rfToGraph(nodes, edges, name) : null}
+        graph={nodes.length > 0 ? rfToGraph(nodes, edges, name, userNodeDefs) : null}
         mgmt={mgmt}
         strategyName={name}
       />
@@ -809,7 +871,7 @@ function BuilderInner() {
       <ChartPreview
         open={chartOpen}
         onClose={() => setChartOpen(false)}
-        graph={nodes.length > 0 ? rfToGraph(nodes, edges, name) : null}
+        graph={nodes.length > 0 ? rfToGraph(nodes, edges, name, userNodeDefs) : null}
         mgmt={mgmt}
         symbol={symbol}
         timeframe={tf}
@@ -826,7 +888,7 @@ function BuilderInner() {
             onBlur={() => setTimeout(() => setNavOpen(false), 150)}
             title="Menu"
             className="flex items-center gap-1 pl-1 pr-1.5 py-1 rounded-lg hover:bg-cream transition-colors">
-            <span className="w-6 h-6 rounded-md bg-ink text-cream2 flex items-center justify-center font-bold text-[12px]">E</span>
+            <LogoMark size={24} />
             <span className="text-muted text-[10px]">▾</span>
           </button>
           {navOpen && (
@@ -1022,6 +1084,8 @@ function BuilderInner() {
           onAdd={addNodeFromPalette}
           onAddCustomNode={addCustomNode}
           onOpenCustomNodeBuilder={() => setCustomNodeOpen(true)}
+          onAddUserNode={addUserNode}
+          onOpenUserNodeBuilder={() => setUserNodeOpen(true)}
           minimized={paletteMin}
           onToggleMinimized={() => setPaletteMin((v) => !v)}
         />

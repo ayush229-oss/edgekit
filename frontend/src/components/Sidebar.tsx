@@ -7,7 +7,7 @@ import { UserButton, useUser } from "@clerk/nextjs";
 import {
   Home, BarChart2, Layers, Wrench, TrendingUp, MessageSquare,
   Lightbulb, Share2, FileText, ShieldCheck, FlaskConical,
-  ChevronLeft, ChevronRight, ArrowLeft, ArrowRight,
+  ChevronLeft, ChevronRight, ArrowLeft, ArrowRight, Settings,
 } from "lucide-react";
 
 type NavItem = { href: string; icon: React.ElementType; label: string };
@@ -23,6 +23,7 @@ const MAIN_NAV: NavItem[] = [
 ];
 
 const BOTTOM_NAV: NavItem[] = [
+  { href: "/settings",    icon: Settings,  label: "Settings" },
   { href: "/suggestions", icon: Lightbulb, label: "Suggestions" },
   { href: "/affiliate",   icon: Share2,    label: "Affiliate" },
   { href: "/legal",       icon: FileText,  label: "Legal" },

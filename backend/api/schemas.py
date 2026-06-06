@@ -70,6 +70,13 @@ class BacktestRequest(BaseModel):
     risk_pct:        float          = 0.01
     max_risk_usd:    float          = 600.0
 
+    # Execution costs
+    spread_pips:     float          = 0.0    # bid/ask spread in pips
+    commission:      float          = 0.0    # USD per round-trip
+    slippage_pips:   float          = 0.0    # market-exit slippage pips
+    swap_long_pips:  float          = 0.0    # overnight carry (long) pips/day
+    swap_short_pips: float          = 0.0    # overnight carry (short) pips/day
+
 
 # ─── Backtest response ───────────────────────────────────────────────────────
 class BacktestMetrics(BaseModel):
@@ -81,6 +88,11 @@ class BacktestMetrics(BaseModel):
     max_dd:        float
     avg_win:       float
     avg_loss:      float
+    avg_rr:        float = 0.0
+    sharpe:        Optional[float] = None
+    sortino:       Optional[float] = None
+    calmar:        Optional[float] = None
+    cagr:          Optional[float] = None
     final_equity:  float
     n_setups:      int
     n_unresolved:  int
