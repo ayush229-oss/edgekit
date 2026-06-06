@@ -1,62 +1,15 @@
 "use client";
-import React from "react";
-
-/**
- * User Settings — persisted to localStorage (browser-local).
- * Covers: default risk %, preferred instruments, execution cost defaults,
- * default timeframe, and theme preference.
- *
- * These values are read by the builder to pre-fill backtest parameters.
- */
-import { useState, useEffect } from "react";
-
-const SETTINGS_KEY = "edgekit.settings.v1";
-
-export type UserSettings = {
-  risk_pct:         number;   // 0.01 = 1%
-  max_risk_usd:     number;
-  default_symbol:   string;
-  default_tf:       string;
-  spread_pips:      number;
-  commission:       number;   // USD round-trip
-  slippage_pips:    number;
-  swap_long_pips:   number;
-  swap_short_pips:  number;
-  default_bars:     number;
-  max_concurrent:   number;
-};
-
-const DEFAULTS: UserSettings = {
-  risk_pct:        0.01,
-  max_risk_usd:    600,
-  default_symbol:  "XAUUSD",
-  default_tf:      "M15",
-  spread_pips:     0,
-  commission:      0,
-  slippage_pips:   0,
-  swap_long_pips:  0,
-  swap_short_pips: 0,
-  default_bars:    5000,
-  max_concurrent:  1,
-};
-
-export function loadSettings(): UserSettings {
-  if (typeof window === "undefined") return DEFAULTS;
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : DEFAULTS;
-  } catch { return DEFAULTS; }
-}
-
-function saveSettings(s: UserSettings) {
-  window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-}
+import React, { useState, useEffect } from "react";
+import {
+  loadSettings, saveSettings,
+  type UserSettings, SETTINGS_DEFAULTS,
+} from "@/lib/settings";
 
 const TIMEFRAMES = ["M1","M5","M15","M30","H1","H4","D1"];
 const SYMBOLS    = ["XAUUSD","EURUSD","GBPUSD","USDJPY","GBPJPY","BTCUSD","US500","NAS100","USOIL"];
 
 export default function SettingsPage() {
-  const [s, setS]     = useState<UserSettings>(DEFAULTS);
+  const [s, setS]   = useState<UserSettings>(SETTINGS_DEFAULTS);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => { setS(loadSettings()); }, []);
@@ -99,7 +52,6 @@ export default function SettingsPage() {
         <p className="text-muted text-sm mt-1">Default values used across the strategy builder. Saved locally in your browser.</p>
       </div>
 
-      {/* Sizing */}
       <section className="rounded-2xl border border-border bg-surface p-6">
         <h2 className="text-[13px] uppercase tracking-widest text-muted font-semibold mb-2">Position Sizing</h2>
         <Row label="Risk per trade" sub="Fraction of equity risked on each trade">
@@ -122,7 +74,6 @@ export default function SettingsPage() {
         </Row>
       </section>
 
-      {/* Defaults */}
       <section className="rounded-2xl border border-border bg-surface p-6">
         <h2 className="text-[13px] uppercase tracking-widest text-muted font-semibold mb-2">Data Defaults</h2>
         <Row label="Default symbol">
@@ -146,7 +97,6 @@ export default function SettingsPage() {
         </Row>
       </section>
 
-      {/* Execution costs */}
       <section className="rounded-2xl border border-border bg-surface p-6">
         <h2 className="text-[13px] uppercase tracking-widest text-muted font-semibold mb-2">Execution Costs</h2>
         <p className="text-[11.5px] text-muted mb-4">Applied to every backtest. Set realistic values for your broker to get accurate results.</p>
@@ -168,17 +118,13 @@ export default function SettingsPage() {
       </section>
 
       <div className="flex items-center gap-3">
-        <button
-          onClick={save}
-          className="px-5 py-2 rounded-lg bg-money text-white text-[13.5px] font-medium hover:bg-moneyDark transition-colors"
-        >
+        <button onClick={save}
+          className="px-5 py-2 rounded-lg bg-money text-white text-[13.5px] font-medium hover:bg-moneyDark transition-colors">
           Save settings
         </button>
-        {saved && <span className="text-[12.5px] text-sage">✓ Saved</span>}
-        <button
-          onClick={() => { setS(DEFAULTS); setSaved(false); }}
-          className="text-[12.5px] text-muted hover:text-ink ml-auto"
-        >
+        {saved && <span className="text-[12.5px] text-sage">Saved</span>}
+        <button onClick={() => { setS(SETTINGS_DEFAULTS); setSaved(false); }}
+          className="text-[12.5px] text-muted hover:text-ink ml-auto">
           Reset to defaults
         </button>
       </div>

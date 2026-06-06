@@ -80,7 +80,7 @@ const UserNodeBuilder = nextDynamic(
 
 import type { CustomNode } from "@/lib/customNodes";
 import { toV2NodeSpec, type UserNodeDef } from "@/lib/userNodes";
-import { loadSettings } from "@/app/(app)/settings/page";
+import { loadSettings } from "@/lib/settings";
 import { LogoMark } from "@/components/LogoMark";
 
 
