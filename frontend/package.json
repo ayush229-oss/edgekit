@@ -12,6 +12,7 @@
     "@clerk/nextjs": "^6.39.4",
     "@supabase/supabase-js": "^2.106.2",
     "clsx": "2.1.1",
+    "framer-motion": "^12.40.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "0.400.0",
     "next": "^14.2.35",
