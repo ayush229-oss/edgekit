@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8765";
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://165.232.178.128:8765";
 
 const nextConfig = {
   reactStrictMode: true,
