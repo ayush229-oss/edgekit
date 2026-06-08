@@ -186,9 +186,15 @@ function BuilderInner() {
   const [resultsMin,       setResultsMin]       = useState(true);
   const [resultsHeight,    setResultsHeight]    = useState(300);
   const [tradeHistoryOpen, setTradeHistoryOpen] = useState(false);
-  const [dateMode,    setDateMode]    = useState(false);
-  const [startDate,   setStartDate]   = useState("");
-  const [endDate,     setEndDate]     = useState("");
+  const [dateMode,    setDateMode]    = useState(() => {
+    try { return localStorage.getItem("edgekit.dateMode") === "1"; } catch { return false; }
+  });
+  const [startDate,   setStartDate]   = useState(() => {
+    try { return localStorage.getItem("edgekit.startDate") || ""; } catch { return ""; }
+  });
+  const [endDate,     setEndDate]     = useState(() => {
+    try { return localStorage.getItem("edgekit.endDate") || ""; } catch { return ""; }
+  });
   const resultsDragRef = useRef<{ startY: number; startH: number } | null>(null);
 
   // ── Save state ─────────────────────────────────────────────────────────
@@ -961,21 +967,40 @@ function BuilderInner() {
             {["M1","M5","M15","M30","H1","H4","D1"].map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <button
-            onClick={() => setDateMode((v) => !v)}
-            title={dateMode ? "Switch to bars mode" : "Switch to date range mode"}
+            onClick={() => {
+              const next = !dateMode;
+              setDateMode(next);
+              try { localStorage.setItem("edgekit.dateMode", next ? "1" : "0"); } catch {}
+              if (next && !startDate && !endDate) {
+                const end = new Date(); end.setDate(end.getDate() - 30);
+                const start = new Date(end); start.setFullYear(start.getFullYear() - 3);
+                const fmt = (d: Date) => d.toISOString().slice(0, 10);
+                setStartDate(fmt(start));
+                setEndDate(fmt(end));
+                try { localStorage.setItem("edgekit.startDate", fmt(start)); } catch {}
+                try { localStorage.setItem("edgekit.endDate", fmt(end)); } catch {}
+              }
+            }}
+            title={dateMode ? "Switch to bars mode" : "Switch to date range mode (fixed dates = reproducible results)"}
             className={`text-xs px-1.5 py-1 rounded border transition-colors ${
               dateMode ? "border-sage/60 bg-sage/15 text-sage" : "border-border text-muted hover:bg-cream"
             }`}
           >
-            {dateMode ? "Date" : "Bars"}
+            {dateMode ? "📅 Date" : "Bars"}
           </button>
           {dateMode ? (
             <>
-              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+              <input type="date" value={startDate} onChange={(e) => {
+                setStartDate(e.target.value);
+                try { localStorage.setItem("edgekit.startDate", e.target.value); } catch {}
+              }}
                 title="Start date"
                 className="text-xs rounded bg-cream border border-border px-1.5 py-1 w-[118px] focus:outline-none focus:ring-1 focus:ring-sage" />
               <span className="text-muted text-xs">→</span>
-              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
+              <input type="date" value={endDate} onChange={(e) => {
+                setEndDate(e.target.value);
+                try { localStorage.setItem("edgekit.endDate", e.target.value); } catch {}
+              }}
                 title="End date"
                 className="text-xs rounded bg-cream border border-border px-1.5 py-1 w-[118px] focus:outline-none focus:ring-1 focus:ring-sage" />
             </>

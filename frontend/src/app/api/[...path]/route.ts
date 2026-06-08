@@ -1,0 +1,49 @@
+import { NextRequest, NextResponse } from "next/server";
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765");
+
+// Only forward headers that the VPS backend actually needs
+const FORWARD_HEADERS = ["content-type", "authorization", "accept", "accept-encoding", "accept-language"];
+
+async function proxy(req: NextRequest, { params }: { params: { path: string[] } }) {
+  try {
+    const path = "/" + params.path.join("/");
+    const url = `${BACKEND_URL}${path}${req.nextUrl.search}`;
+
+    const reqHeaders: Record<string, string> = {};
+    for (const key of FORWARD_HEADERS) {
+      const val = req.headers.get(key);
+      if (val) reqHeaders[key] = val;
+    }
+    const apiKey = process.env.EDGEKIT_API_KEY?.replace(/[^\x20-\x7E]/g, "");
+    if (apiKey) reqHeaders["x-api-key"] = apiKey;
+
+    const hasBody = !["GET", "HEAD"].includes(req.method);
+    const upstream = await fetch(url, {
+      method: req.method,
+      headers: reqHeaders,
+      body: hasBody ? await req.text() : undefined,
+    });
+
+    const resHeaders: Record<string, string> = {};
+    upstream.headers.forEach((value, key) => {
+      if (key !== "transfer-encoding") resHeaders[key] = value.replace(/[^\x20-\x7E]/g, "");
+    });
+
+    return new NextResponse(await upstream.text(), {
+      status: upstream.status,
+      headers: resHeaders,
+    });
+  } catch (e) {
+    console.error("[proxy]", e);
+    return NextResponse.json({ error: "proxy error", detail: String(e) }, { status: 502 });
+  }
+}
+
+export const GET = proxy;
+export const POST = proxy;
+export const PUT = proxy;
+export const DELETE = proxy;
+export const PATCH = proxy;

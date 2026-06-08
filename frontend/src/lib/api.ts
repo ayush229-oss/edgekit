@@ -11,8 +11,9 @@
 //               (e.g. when hosting backend on a different domain).
 export const API_URL =
   typeof window === "undefined"
-    // Server-side (SSR/RSC): call VPS directly
-    ? (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8765")
+    // Server-side (SSR/RSC): call VPS directly; on Vercel default to VPS IP
+    ? (process.env.NEXT_PUBLIC_API_URL ||
+       (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765"))
     // Browser: always use /api proxy to avoid mixed-content (HTTPS → HTTP) blocks
     : "/api";
 
@@ -22,7 +23,10 @@ export const API_URL =
 // so we must NOT expose it client-side (window defined → no header added).
 export function efetch(input: string, init: Parameters<typeof fetch>[1] = {}): Promise<Response> {
   if (typeof window === "undefined" && process.env.EDGEKIT_API_KEY) {
-    init = { ...init, headers: { ...(init?.headers || {}), "x-api-key": process.env.EDGEKIT_API_KEY } };
+    const apiKey = process.env.EDGEKIT_API_KEY.replace(/[^\x20-\x7E]/g, "");
+    if (apiKey) {
+      init = { ...init, headers: { ...(init?.headers || {}), "x-api-key": apiKey } };
+    }
   }
   return fetch(input, init);
 }

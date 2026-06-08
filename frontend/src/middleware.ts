@@ -9,7 +9,6 @@
  * We don't gate the proxy itself so public pages (e.g. strategy previews) still work.
  */
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { NextResponse } from "next/server";
 
 const isProtected = createRouteMatcher([
   "/home(.*)",
@@ -28,19 +27,7 @@ const isProtected = createRouteMatcher([
 
 export default clerkMiddleware(async (auth, req) => {
   if (isProtected(req)) {
-    await auth.protect();    // redirects unauthenticated users to /sign-in
-  }
-
-  // Inject the shared API key on backend-proxy calls (/api/* → VPS rewrite).
-  // EDGEKIT_API_KEY is a server-only env var (no NEXT_PUBLIC_ prefix) so the
-  // browser never sees it. The VPS requires this header on every request.
-  if (req.nextUrl.pathname.startsWith("/api/")) {
-    const key = process.env.EDGEKIT_API_KEY;
-    if (key) {
-      const headers = new Headers(req.headers);
-      headers.set("x-api-key", key);
-      return NextResponse.next({ request: { headers } });
-    }
+    await auth.protect();
   }
 });
 
