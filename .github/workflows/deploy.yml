@@ -62,37 +62,35 @@ jobs:
     name: Frontend -> edgekit.uk
     runs-on: ubuntu-latest
     needs: test-backend
-    defaults:
-      run:
-        working-directory: frontend
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_ORG_ID: team_9WNLaWQuLtQTeqTAiRXE0o8J
       VERCEL_PROJECT_ID: prj_t19N5s9UEPutCLmGPTRZ9kt01XAM
+      VERCEL_TEAM_ID: team_9WNLaWQuLtQTeqTAiRXE0o8J
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      - name: Link Vercel project
+      - name: Wait for Vercel deployment and alias
         run: |
-          mkdir -p .vercel
-          echo '{"projectId":"prj_t19N5s9UEPutCLmGPTRZ9kt01XAM","orgId":"team_9WNLaWQuLtQTeqTAiRXE0o8J"}' > .vercel/project.json
-
-      - name: Deploy to Vercel production
-        id: deploy
-        run: |
-          output=$(vercel --prod --yes --token "$VERCEL_TOKEN" 2>&1)
-          echo "$output"
-          url=$(echo "$output" | grep -o 'https://[^ ]*\.vercel\.app' | tail -1)
-          if [ -z "$url" ]; then
-            echo "ERROR: could not extract deployment URL"
-            exit 1
-          fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-
-      - name: Alias to edgekit.uk
-        run: |
-          vercel alias "${{ steps.deploy.outputs.url }}" edgekit.uk --token "$VERCEL_TOKEN"
-          vercel alias "${{ steps.deploy.outputs.url }}" www.edgekit.uk --token "$VERCEL_TOKEN"
+          echo "Waiting for Vercel to finish deploying commit ${{ github.sha }}..."
+          for i in $(seq 1 30); do
+            URL=$(curl -s "https://api.vercel.com/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_TEAM_ID&limit=5" \
+              -H "Authorization: Bearer $VERCEL_TOKEN" | python3 -c "
+import sys, json
+deps = json.load(sys.stdin).get('deployments', [])
+for d in deps:
+    if d.get('state') == 'READY' and d.get('target') == 'production':
+        print('https://' + d['url'])
+        break
+" 2>/dev/null)
+            if [ -n "$URL" ]; then
+              echo "Deployment ready: $URL"
+              vercel alias "$URL" edgekit.uk --token "$VERCEL_TOKEN"
+              vercel alias "$URL" www.edgekit.uk --token "$VERCEL_TOKEN"
+              exit 0
+            fi
+            echo "  attempt $i/30 — not ready yet, waiting 15s..."
+            sleep 15
+          done
+          echo "ERROR: timed out waiting for Vercel deployment"
+          exit 1
