@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createChart,
   CandlestickSeries,
-  LineSeries,      // still used by strategy indicators
+  LineSeries,
   HistogramSeries,
   createSeriesMarkers,
   CrosshairMode,
@@ -38,10 +38,10 @@ import type { V2Graph } from "@/lib/api";
 import type { TradeMgmt } from "@/components/TradeManagement";
 
 
-// ── Palette (matches the cream/sage/terra app theme) ──────────────────────
+// ── Palette ───────────────────────────────────────────────────────────────
 const C = {
   sage:   "#6B9B7A",
-  sageF:  "#6B9B7A55",   // faded for ribbon
+  sageF:  "#6B9B7A55",
   terra:  "#C97B63",
   terraF: "#C97B6355",
   amber:  "#D4A574",
@@ -53,10 +53,7 @@ const C = {
 };
 
 
-// ── Structural-zone primitive ────────────────────────────────────────────
-// Draws the engine's actual decisions as shapes: filled OB / FVG rectangles
-// and dashed swept-liquidity level lines. Uses lightweight-charts' series
-// primitive API so shapes track pan/zoom precisely.
+// ── Structural-zone primitive ─────────────────────────────────────────────
 type ZShape =
   | { type: "rect";  t1: UTCTimestamp; t2: UTCTimestamp; hi: number; lo: number; fill: string; stroke: string }
   | { type: "hline"; t1: UTCTimestamp; t2: UTCTimestamp; price: number; color: string };
@@ -74,13 +71,11 @@ class ZonesPrimitive {
   paneViews() { return this._paneViews; }
   setShapes(s: ZShape[]) { this._shapes = s; this._requestUpdate?.(); }
 }
-
 class ZonesPaneView {
   constructor(private _src: ZonesPrimitive) {}
   update() {}
   renderer() { return new ZonesRenderer(this._src); }
 }
-
 class ZonesRenderer {
   constructor(private _src: ZonesPrimitive) {}
   draw(target: any) {
@@ -122,12 +117,6 @@ class ZonesRenderer {
 
 
 // ── Position-box primitive ────────────────────────────────────────────────
-// Renders TradingView-style long / short position boxes for every trade:
-//   • filled green zone  → entry ↔ TP  (profit)
-//   • filled red zone    → SL ↔ entry  (loss)
-//   • solid entry line, dashed SL and TP lines
-//   • left edge: thin vertical at the fill bar
-// Selected trade renders at full opacity; others are faded.
 type TBox = {
   t1: UTCTimestamp; t2: UTCTimestamp;
   entry: number; sl: number; tp: number;
@@ -174,34 +163,27 @@ class PositionBoxesRenderer {
         const left  = Math.min(x1, x2) * hr;
         const right = Math.max(x1, x2) * hr;
         const w     = Math.max(2, right - left);
-        const a     = box.sel ? 0.26 : 0.12;   // fill alpha
+        const a     = box.sel ? 0.26 : 0.12;
 
-        // Profit zone (entry ↔ tp)
         ctx.fillStyle = `rgba(107,155,122,${a})`;
         ctx.fillRect(left, Math.min(yE, yT) * vr, w, Math.abs(yT - yE) * vr);
-
-        // Loss zone (entry ↔ sl)
         ctx.fillStyle = `rgba(201,123,99,${a})`;
         ctx.fillRect(left, Math.min(yE, yS) * vr, w, Math.abs(yS - yE) * vr);
 
         const lw = (box.sel ? 1.5 : 1) * hr;
 
-        // TP line — dashed sage
         ctx.strokeStyle = box.sel ? "rgba(107,155,122,1.0)" : "rgba(107,155,122,0.65)";
         ctx.lineWidth = lw; ctx.setLineDash([4 * hr, 3 * hr]);
         ctx.beginPath(); ctx.moveTo(left, yT * vr); ctx.lineTo(right, yT * vr); ctx.stroke();
 
-        // SL line — dashed terra
         ctx.strokeStyle = box.sel ? "rgba(201,123,99,1.0)" : "rgba(201,123,99,0.65)";
         ctx.lineWidth = lw;
         ctx.beginPath(); ctx.moveTo(left, yS * vr); ctx.lineTo(right, yS * vr); ctx.stroke();
 
-        // Entry line — solid ink
         ctx.strokeStyle = box.sel ? "rgba(44,62,45,1.0)" : "rgba(44,62,45,0.55)";
         ctx.lineWidth = lw; ctx.setLineDash([]);
         ctx.beginPath(); ctx.moveTo(left, yE * vr); ctx.lineTo(right, yE * vr); ctx.stroke();
 
-        // Left-edge vertical at entry bar (direction colour)
         ctx.strokeStyle = box.isBull ? "rgba(107,155,122,0.6)" : "rgba(201,123,99,0.6)";
         ctx.lineWidth = 2 * hr;
         ctx.beginPath();
@@ -214,7 +196,6 @@ class PositionBoxesRenderer {
 }
 
 
-// Compute target price from entry / sl / direction / target_r
 function tpPrice(tr: ChartTrade, targetR: number) {
   const r1 = Math.abs(tr.entry - tr.sl);
   return tr.direction === "Bull" ? tr.entry + r1 * targetR : tr.entry - r1 * targetR;
@@ -226,7 +207,6 @@ function tradeColor(tr: ChartTrade) {
   return C.muted;
 }
 
-// True if bar `i` is inside trade `tr`'s live window
 function activeAt(tr: ChartTrade, i: number) {
   const s = tr.fill_idx ?? tr.signal_idx;
   const e = tr.exit_idx ?? s + 200;
@@ -243,26 +223,17 @@ export function ChartPreview({
   mgmt:        TradeMgmt;
   symbol:      string;
   timeframe:   string;
-  defaultBars?: number;     // inherits from the top-bar Bars input
+  defaultBars?: number;
 }) {
   // ── Refs ──────────────────────────────────────────────────────────────
-  const containerRef  = useRef<HTMLDivElement>(null);
-  const chartRef      = useRef<IChartApi | null>(null);
-  const candlesRef    = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const markersRef    = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-
-  // Position-box primitive (replaces the 3 sparse line-series approach)
-  const posBoxPrimRef = useRef<PositionBoxesPrimitive | null>(null);
-  // Ribbon overlay series
-  const ribbonRef     = useRef<ISeriesApi<"Histogram"> | null>(null);
-
-  // Strategy indicator lines (EMA, Donchian, Bollinger, etc.) — rebuilt with the chart
-  const indicatorRefs = useRef<ISeriesApi<"Line">[]>([]);
-
-  // Structural-zone primitive (OB/FVG zones, swept levels)
-  const zonesPrimRef  = useRef<ZonesPrimitive | null>(null);
-
-  // Per-selection price lines (cleared on each new selection)
+  const containerRef     = useRef<HTMLDivElement>(null);
+  const chartRef         = useRef<IChartApi | null>(null);
+  const candlesRef       = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersRef       = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const posBoxPrimRef    = useRef<PositionBoxesPrimitive | null>(null);
+  const ribbonRef        = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const indicatorRefs    = useRef<ISeriesApi<"Line">[]>([]);
+  const zonesPrimRef     = useRef<ZonesPrimitive | null>(null);
   const selPriceLinesRef = useRef<IPriceLine[]>([]);
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -271,30 +242,36 @@ export function ChartPreview({
   const [err,     setErr]     = useState<string | null>(null);
   const [nBars,   setNBars]   = useState(defaultBars);
   const [localTf, setLocalTf] = useState(timeframe);
-  // Re-sync when the top-bar value changes while modal is closed
   useEffect(() => { if (!open) { setNBars(defaultBars); setLocalTf(timeframe); } }, [defaultBars, timeframe, open]);
+
   const [selIdx, setSelIdx] = useState<number | null>(null);
-  const [showZones,      setShowZones]      = useState(true);
+
+  // posMode: 0 = off · 1 = selected trade only (default) · 2 = all trades
+  const [posMode,        setPosMode]        = useState<0 | 1 | 2>(1);
   const [showRibbon,     setShowRibbon]     = useState(false);
   const [showIndicators, setShowIndicators] = useState(true);
   const [showStructures, setShowStructures] = useState(true);
-  // Replay: null = live (show all); a number = playhead bar index
+  const [showTradeHistory, setShowTradeHistory] = useState(true);
+
+  // Replay
   const [replayIdx, setReplayIdx] = useState<number | null>(null);
   const [playing,   setPlaying]   = useState(false);
 
+  // Editable position tool — live entry/SL/TP for the selected trade
+  const [editEntry, setEditEntry] = useState<number | null>(null);
+  const [editSl,    setEditSl]    = useState<number | null>(null);
+  const [editTp,    setEditTp]    = useState<number | null>(null);
+
   const TF_OPTIONS = ["M5", "M15", "M30", "H1", "H4", "D1"];
 
-  // ── Fetch on open / param change ──────────────────────────────────────
-  // Strategy ALWAYS runs on the original `timeframe` prop (from builder).
-  // `localTf` is the VIEW timeframe — it only swaps the candle backdrop.
-  // Trades / markers / position boxes are timestamp-based and auto-align on any TF.
+  // ── Fetch ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!open || !graph || graph.nodes.length === 0) return;
     setBusy(true); setErr(null); setData(null); setSelIdx(null);
     v2ChartPreview({
       graph, symbol,
-      timeframe: timeframe,                                      // strategy TF — never changes
-      view_tf:   localTf !== timeframe ? localTf : undefined,   // view TF — only swaps bars
+      timeframe: timeframe,
+      view_tf:   localTf !== timeframe ? localTf : undefined,
       n_bars: nBars,
       target_r:         mgmt.target_r,
       target_close_pct: mgmt.target_close_pct,
@@ -305,10 +282,10 @@ export function ChartPreview({
       .then(setData)
       .catch((e) => setErr(e.message ?? String(e)))
       .finally(() => setBusy(false));
-  }, [open, graph, mgmt, symbol, localTf, nBars]);    // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, graph, mgmt, symbol, localTf, nBars]);  // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  // ── Build chart when data arrives ─────────────────────────────────────
+  // ── Build chart ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || !data || data.bars.length === 0) return;
 
@@ -316,130 +293,60 @@ export function ChartPreview({
     const el = containerRef.current;
 
     const chart = createChart(el, {
-      layout: {
-        background: { color: C.cream },
-        textColor:  C.muted,
-      },
-      grid: {
-        vertLines: { color: C.grid },
-        horzLines: { color: C.grid },
-      },
+      layout: { background: { color: C.cream }, textColor: C.muted },
+      grid:   { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: {
-        borderColor:  C.border,
-        scaleMargins: { top: 0.08, bottom: 0.18 },   // leave room for ribbon
-      },
+      rightPriceScale: { borderColor: C.border, scaleMargins: { top: 0.08, bottom: 0.18 } },
       timeScale: {
-        borderColor:    C.border,
-        timeVisible:    true,
-        secondsVisible: false,
-        rightOffset:    8,
-        minBarSpacing:  2,
+        borderColor: C.border, timeVisible: true, secondsVisible: false,
+        rightOffset: 8, minBarSpacing: 2,
       },
-      handleScroll: true,
-      handleScale:  true,
+      handleScroll: true, handleScale: true,
     });
     chartRef.current = chart;
 
-    // Candles — use view_bars (different display TF) when available,
-    // otherwise fall back to strategy bars.
-    // Trades / markers / position boxes use data.bars timestamps and
-    // auto-align correctly regardless of which TF the candles are on.
     const displayBars = data.view_bars ?? data.bars;
     const candles = chart.addSeries(CandlestickSeries, {
-      upColor:         C.sage,
-      downColor:       C.terra,
-      borderUpColor:   C.sage,
-      borderDownColor: C.terra,
-      wickUpColor:     C.sage,
-      wickDownColor:   C.terra,
+      upColor: C.sage, downColor: C.terra,
+      borderUpColor: C.sage, borderDownColor: C.terra,
+      wickUpColor: C.sage, wickDownColor: C.terra,
     });
-    candles.setData(
-      displayBars.map((b) => ({
-        time:  b.t as UTCTimestamp,
-        open:  b.o, high: b.h, low: b.l, close: b.c,
-      }))
-    );
+    candles.setData(displayBars.map((b) => ({ time: b.t as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c })));
     candlesRef.current = candles;
 
-    // Attach the structural-zone primitive (OB/FVG/swept levels)
     try {
       const zp = new ZonesPrimitive();
       (candles as any).attachPrimitive?.(zp);
       zonesPrimRef.current = zp;
     } catch { zonesPrimRef.current = null; }
 
-    // Attach the position-boxes primitive (trade entry/SL/TP boxes)
     try {
       const pb = new PositionBoxesPrimitive();
       (candles as any).attachPrimitive?.(pb);
       posBoxPrimRef.current = pb;
     } catch { posBoxPrimRef.current = null; }
 
-    // ── Markers: small dots only — NO text labels (those go on selection) ──
-    type M = {
-      time:     UTCTimestamp;
-      position: SeriesMarkerBarPosition;
-      shape:    SeriesMarkerShape;
-      color:    string;
-      size?:    number;
-    };
+    type M = { time: UTCTimestamp; position: SeriesMarkerBarPosition; shape: SeriesMarkerShape; color: string; size?: number };
     const markers: M[] = [];
     data.trades.forEach((tr) => {
       const isBull = tr.direction === "Bull";
-
-      // Signal bar — where the condition fired (small dot above/below)
       if (tr.signal_idx !== null && tr.fill_idx !== null && tr.signal_idx !== tr.fill_idx) {
         const sb = data.bars[tr.signal_idx];
-        if (sb) {
-          markers.push({
-            time:     sb.t as UTCTimestamp,
-            position: (isBull ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition,
-            color:    (isBull ? C.sage : C.terra) + "88",
-            shape:    "circle",
-            size:     0.4,
-          });
-        }
+        if (sb) markers.push({ time: sb.t as UTCTimestamp, position: (isBull ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition, color: (isBull ? C.sage : C.terra) + "88", shape: "circle", size: 0.4 });
       }
-
-      // Entry fill — large arrow showing direction
       const fi = tr.fill_idx ?? tr.signal_idx;
       const fb = data.bars[fi];
-      if (fb) {
-        markers.push({
-          time:     fb.t as UTCTimestamp,
-          position: (isBull ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition,
-          color:    isBull ? C.sage : C.terra,
-          shape:    (isBull ? "arrowUp" : "arrowDown") as SeriesMarkerShape,
-          size:     1.5,
-        });
-      }
-
-      // Exit marker — X shape
+      if (fb) markers.push({ time: fb.t as UTCTimestamp, position: (isBull ? "belowBar" : "aboveBar") as SeriesMarkerBarPosition, color: isBull ? C.sage : C.terra, shape: (isBull ? "arrowUp" : "arrowDown") as SeriesMarkerShape, size: 1.5 });
       if (tr.exit_idx !== null) {
         const eb = data.bars[tr.exit_idx];
-        if (eb) {
-          markers.push({
-            time:     eb.t as UTCTimestamp,
-            position: (isBull ? "aboveBar" : "belowBar") as SeriesMarkerBarPosition,
-            color:    tradeColor(tr),
-            shape:    "circle",
-            size:     0.8,
-          });
-        }
+        if (eb) markers.push({ time: eb.t as UTCTimestamp, position: (isBull ? "aboveBar" : "belowBar") as SeriesMarkerBarPosition, color: tradeColor(tr), shape: "circle", size: 0.8 });
       }
     });
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     markersRef.current = createSeriesMarkers(candles, markers);
 
-    // ── Resize ────────────────────────────────────────────────────────
     const ro = new ResizeObserver(() => {
-      if (el && chartRef.current) {
-        chartRef.current.applyOptions({
-          width:  el.clientWidth,
-          height: el.clientHeight,
-        });
-      }
+      if (el && chartRef.current) chartRef.current.applyOptions({ width: el.clientWidth, height: el.clientHeight });
     });
     ro.observe(el);
     chart.timeScale().fitContent();
@@ -447,61 +354,35 @@ export function ChartPreview({
     return () => {
       ro.disconnect();
       markersRef.current?.detach();
-      markersRef.current    = null;
-      candlesRef.current    = null;
-      zonesPrimRef.current  = null;
-      posBoxPrimRef.current = null;
-      ribbonRef.current     = null;
-      indicatorRefs.current = [];
+      markersRef.current = null; candlesRef.current = null;
+      zonesPrimRef.current = null; posBoxPrimRef.current = null;
+      ribbonRef.current = null; indicatorRefs.current = [];
       selPriceLinesRef.current = [];
-      chart.remove();
-      chartRef.current = null;
+      chart.remove(); chartRef.current = null;
     };
-  }, [data]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  // ── Strategy indicators (EMA / Donchian / Bollinger / VWAP / …) ──────
-  // Drawn on top of the candles as line series. Toggle via the legend pill.
+  // ── Strategy indicators ───────────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data) return;
-
-    // Tear down existing indicator lines
-    for (const s of indicatorRefs.current) {
-      try { chart.removeSeries(s); } catch {}
-    }
+    for (const s of indicatorRefs.current) { try { chart.removeSeries(s); } catch {} }
     indicatorRefs.current = [];
-
     if (!showIndicators || !data.indicators || data.indicators.length === 0) return;
-
-    const styleMap = {
-      solid:  LineStyle.Solid,
-      dashed: LineStyle.Dashed,
-      dotted: LineStyle.Dotted,
-    } as const;
-
+    const styleMap = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted } as const;
     for (const ind of data.indicators) {
       const series = chart.addSeries(LineSeries, {
-        color:                  ind.color,
-        lineWidth:              ind.line_width as 1 | 2 | 3 | 4,
-        lineStyle:              styleMap[ind.line_style] ?? LineStyle.Solid,
-        crosshairMarkerVisible: false,
-        lastValueVisible:       false,
-        priceLineVisible:       false,
-        title:                  ind.label,
+        color: ind.color, lineWidth: ind.line_width as 1|2|3|4,
+        lineStyle: styleMap[ind.line_style] ?? LineStyle.Solid,
+        crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+        title: ind.label,
       });
-
-      // Build sparse points — undefined breaks the line so warmup bars don't
-      // get connected by a phantom segment back to bar 0.
       const points: Array<{ time: UTCTimestamp; value?: number }> = [];
       for (let i = 0; i < data.bars.length && i < ind.values.length; i++) {
         const v = ind.values[i];
         const t = data.bars[i].t as UTCTimestamp;
-        if (v === null || v === undefined || !Number.isFinite(v)) {
-          points.push({ time: t });
-        } else {
-          points.push({ time: t, value: v });
-        }
+        points.push(v === null || v === undefined || !Number.isFinite(v) ? { time: t } : { time: t, value: v });
       }
       series.setData(points as any);
       indicatorRefs.current.push(series);
@@ -509,162 +390,134 @@ export function ChartPreview({
   }, [data, showIndicators]);
 
 
-  // ── Structures: OB/FVG zones + swept-liquidity levels (the strategy trace) ──
+  // ── Structural zones ──────────────────────────────────────────────────
   useEffect(() => {
     const zp = zonesPrimRef.current;
     if (!zp || !data) return;
-    if (!showStructures || !data.artifacts || data.artifacts.length === 0) {
-      zp.setShapes([]);
-      return;
-    }
+    if (!showStructures || !data.artifacts || data.artifacts.length === 0) { zp.setShapes([]); return; }
     const bars = data.bars;
     const shapes: ZShape[] = [];
     for (const a of data.artifacts) {
-      if (a.kind === "zone" && a.from_idx != null && a.to_idx != null
-          && a.price_hi != null && a.price_lo != null) {
+      if (a.kind === "zone" && a.from_idx != null && a.to_idx != null && a.price_hi != null && a.price_lo != null) {
         const b1 = bars[a.from_idx]; const b2 = bars[a.to_idx];
         if (!b1 || !b2) continue;
         const bull = a.color_hint !== "bear";
-        shapes.push({
-          type: "rect",
-          t1: b1.t as UTCTimestamp, t2: b2.t as UTCTimestamp,
-          hi: a.price_hi, lo: a.price_lo,
-          fill:   bull ? "rgba(107,155,122,0.10)" : "rgba(201,123,99,0.10)",
-          stroke: bull ? "rgba(107,155,122,0.55)" : "rgba(201,123,99,0.55)",
-        });
+        shapes.push({ type: "rect", t1: b1.t as UTCTimestamp, t2: b2.t as UTCTimestamp, hi: a.price_hi, lo: a.price_lo, fill: bull ? "rgba(107,155,122,0.10)" : "rgba(201,123,99,0.10)", stroke: bull ? "rgba(107,155,122,0.55)" : "rgba(201,123,99,0.55)" });
       } else if (a.kind === "level" && a.at_idx != null && a.price != null) {
-        const b1 = bars[a.at_idx];
-        const b2 = bars[Math.min(bars.length - 1, a.at_idx + 15)];
+        const b1 = bars[a.at_idx]; const b2 = bars[Math.min(bars.length - 1, a.at_idx + 15)];
         if (!b1 || !b2) continue;
-        const bear = a.color_hint === "bear";
-        shapes.push({
-          type: "hline",
-          t1: b1.t as UTCTimestamp, t2: b2.t as UTCTimestamp,
-          price: a.price,
-          color: bear ? "rgba(201,123,99,0.9)" : "rgba(107,155,122,0.9)",
-        });
+        shapes.push({ type: "hline", t1: b1.t as UTCTimestamp, t2: b2.t as UTCTimestamp, price: a.price, color: a.color_hint === "bear" ? "rgba(201,123,99,0.9)" : "rgba(107,155,122,0.9)" });
       }
     }
     zp.setShapes(shapes);
   }, [data, showStructures]);
 
 
-  // ── Toggle 1: Position boxes (replaces 3 sparse line series) ────────
-  // Draws a TradingView-style long/short position tool for every trade:
-  //   green filled zone = profit side (entry→TP), red = loss side (SL→entry)
-  //   selected trade renders at full opacity; all others are faded.
+  // ── Position boxes ─────────────────────────────────────────────────────
+  // posMode 0 = off · 1 = selected trade only · 2 = all trades
+  // Selected trade uses editEntry/editSl/editTp for live what-if adjustment.
   useEffect(() => {
     const pb = posBoxPrimRef.current;
     if (!pb || !data) return;
 
-    if (!showZones) { pb.setBoxes([]); return; }
+    if (posMode === 0) { pb.setBoxes([]); return; }
 
     const tR = mgmt.target_r ?? 3;
     const boxes: TBox[] = [];
     data.trades.forEach((tr, i) => {
+      const isSel = i === selIdx;
+      if (posMode === 1 && !isSel) return;
+
       const fi = tr.fill_idx ?? tr.signal_idx;
       const ei = tr.exit_idx ?? Math.min(data.bars.length - 1, fi + 60);
-      const b1 = data.bars[fi];
-      const b2 = data.bars[ei];
+      const b1 = data.bars[fi]; const b2 = data.bars[ei];
       if (!b1 || !b2) return;
+
       boxes.push({
         t1:     b1.t as UTCTimestamp,
         t2:     b2.t as UTCTimestamp,
-        entry:  tr.entry,
-        sl:     tr.sl,
-        tp:     tpPrice(tr, tR),
+        entry:  isSel && editEntry !== null ? editEntry : tr.entry,
+        sl:     isSel && editSl    !== null ? editSl    : tr.sl,
+        tp:     isSel && editTp    !== null ? editTp    : tpPrice(tr, tR),
         isBull: tr.direction === "Bull",
-        sel:    i === selIdx,
+        sel:    isSel,
       });
     });
     pb.setBoxes(boxes);
-  }, [showZones, data, mgmt.target_r, selIdx]);
+  }, [posMode, data, mgmt.target_r, selIdx, editEntry, editSl, editTp]);
 
 
-  // ── Toggle 2: Position ribbon (histogram at the bottom) ──────────────
+  // ── Position ribbon ───────────────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data) return;
-
     if (!showRibbon) {
       if (ribbonRef.current) { chart.removeSeries(ribbonRef.current); ribbonRef.current = null; }
       return;
     }
-
     const ribbon = chart.addSeries(HistogramSeries, {
-      priceFormat:    { type: "volume" },
-      priceScaleId:   "ribbon",     // separate scale, anchored at bottom
-      lastValueVisible: false,
-      priceLineVisible: false,
+      priceFormat: { type: "volume" }, priceScaleId: "ribbon",
+      lastValueVisible: false, priceLineVisible: false,
     });
-    chart.priceScale("ribbon").applyOptions({
-      scaleMargins: { top: 0.92, bottom: 0 },   // hug the bottom 8%
-    });
-
+    chart.priceScale("ribbon").applyOptions({ scaleMargins: { top: 0.92, bottom: 0 } });
     const arr = data.bars.map((b, i) => {
       const active = data.trades.find((tr) => activeAt(tr, i));
-      if (!active) return { time: b.t as UTCTimestamp, value: 0,    color: "transparent" };
-      return {
-        time:  b.t as UTCTimestamp,
-        value: 1,
-        color: active.direction === "Bull" ? C.sageF : C.terraF,
-      };
+      if (!active) return { time: b.t as UTCTimestamp, value: 0, color: "transparent" };
+      return { time: b.t as UTCTimestamp, value: 1, color: active.direction === "Bull" ? C.sageF : C.terraF };
     });
     ribbon.setData(arr as any);
     ribbonRef.current = ribbon;
   }, [showRibbon, data]);
 
 
-  // ── Selection: zoom + show Entry/SL/TP price lines for one trade ─────
+  // ── Trade selection: zoom + price lines ───────────────────────────────
   useEffect(() => {
     const chart  = chartRef.current;
     const series = candlesRef.current;
     if (!chart || !series || !data) return;
 
-    // Clear previous selection lines
-    for (const pl of selPriceLinesRef.current) {
-      try { series.removePriceLine(pl); } catch {}
-    }
+    for (const pl of selPriceLinesRef.current) { try { series.removePriceLine(pl); } catch {} }
     selPriceLinesRef.current = [];
 
     if (selIdx === null) return;
     const tr = data.trades[selIdx];
     if (!tr) return;
 
-    // Entry / SL / TP price lines for this trade
-    const tp = tpPrice(tr, mgmt.target_r ?? 3);
-    const lines: IPriceLine[] = [
-      series.createPriceLine({
-        price: tr.entry, color: C.ink, lineWidth: 1, lineStyle: LineStyle.Solid,
-        axisLabelVisible: true, title: `Entry #${selIdx + 1}`,
-      }),
-      series.createPriceLine({
-        price: tr.sl, color: C.terra, lineWidth: 1, lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true, title: "SL",
-      }),
-      series.createPriceLine({
-        price: tp, color: C.sage, lineWidth: 1, lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true, title: `TP ${mgmt.target_r ?? 3}R`,
-      }),
-    ];
-    selPriceLinesRef.current = lines;
+    const tp = editTp ?? tpPrice(tr, mgmt.target_r ?? 3);
+    const entry = editEntry ?? tr.entry;
+    const sl    = editSl    ?? tr.sl;
 
-    // Zoom to the trade with padding
+    selPriceLinesRef.current = [
+      series.createPriceLine({ price: entry, color: C.ink,   lineWidth: 1, lineStyle: LineStyle.Solid,  axisLabelVisible: true, title: `Entry #${selIdx + 1}` }),
+      series.createPriceLine({ price: sl,    color: C.terra, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "SL" }),
+      series.createPriceLine({ price: tp,    color: C.sage,  lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: `TP ${mgmt.target_r ?? 3}R` }),
+    ];
+
     const s   = tr.fill_idx ?? tr.signal_idx;
     const e   = tr.exit_idx ?? s + 30;
     const pad = Math.max(15, Math.round((e - s) * 0.5));
     const from = data.bars[Math.max(0, s - pad)];
     const to   = data.bars[Math.min(data.bars.length - 1, e + pad)];
-    if (from && to) {
-      chart.timeScale().setVisibleRange({
-        from: from.t as UTCTimestamp,
-        to:   to.t   as UTCTimestamp,
-      });
+    if (from && to) chart.timeScale().setVisibleRange({ from: from.t as UTCTimestamp, to: to.t as UTCTimestamp });
+  }, [selIdx, data, mgmt.target_r, editEntry, editSl, editTp]);
+
+
+  // ── Sync edit values when a trade is selected ─────────────────────────
+  useEffect(() => {
+    if (selIdx === null || !data) {
+      setEditEntry(null); setEditSl(null); setEditTp(null);
+      return;
     }
-  }, [selIdx, data, mgmt.target_r]);
+    const tr = data.trades[selIdx];
+    if (tr) {
+      setEditEntry(tr.entry);
+      setEditSl(tr.sl);
+      setEditTp(tpPrice(tr, mgmt.target_r ?? 3));
+    }
+  }, [selIdx, data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  // ── Replay: advance the playhead while playing ───────────────────────
+  // ── Replay ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!playing || !data) return;
     const id = setInterval(() => {
@@ -678,373 +531,391 @@ export function ChartPreview({
     return () => clearInterval(id);
   }, [playing, data]);
 
-  // ── Replay: scroll the chart so the playhead sits at the right edge ──
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data || data.bars.length === 0) return;
     if (replayIdx == null) { chart.timeScale().fitContent(); return; }
     const from = data.bars[Math.max(0, replayIdx - 120)];
     const to   = data.bars[replayIdx];
-    if (from && to) {
-      chart.timeScale().setVisibleRange({ from: from.t as UTCTimestamp, to: to.t as UTCTimestamp });
-    }
+    if (from && to) chart.timeScale().setVisibleRange({ from: from.t as UTCTimestamp, to: to.t as UTCTimestamp });
   }, [replayIdx, data]);
 
-  // What's happening at the playhead bar — the "why did/didn't it trade here" readout
   const replayInfo = useMemo(() => {
     if (replayIdx == null || !data) return null;
     const b = data.bars[replayIdx];
     if (!b) return null;
     const entries = data.trades.filter((t) => (t.fill_idx ?? t.signal_idx) === replayIdx);
     const exits   = data.trades.filter((t) => t.exit_idx === replayIdx);
-    const zones   = (data.artifacts ?? []).filter(
-      (a) => a.kind === "zone" && a.from_idx != null && a.to_idx != null
-             && a.from_idx <= replayIdx && replayIdx <= (a.to_idx as number));
+    const zones   = (data.artifacts ?? []).filter((a) => a.kind === "zone" && a.from_idx != null && a.to_idx != null && a.from_idx <= replayIdx && replayIdx <= (a.to_idx as number));
     const levels  = (data.artifacts ?? []).filter((a) => a.kind === "level" && a.at_idx === replayIdx);
     return { b, entries, exits, zones, levels };
   }, [replayIdx, data]);
 
   if (!open) return null;
 
-  const wins   = data?.trades.filter((t) => t.result === "Win").length  ?? 0;
-  const losses = data?.trades.filter((t) => t.result === "Loss").length ?? 0;
-  const totalR = data?.trades.reduce((s, t) => s + t.pnl_r, 0)         ?? 0;
+  const wins    = data?.trades.filter((t) => t.result === "Win").length  ?? 0;
+  const losses  = data?.trades.filter((t) => t.result === "Loss").length ?? 0;
+  const totalR  = data?.trades.reduce((s, t) => s + t.pnl_r, 0)         ?? 0;
   const selTrade = selIdx !== null ? data?.trades[selIdx] : null;
 
+  const POS_MODE_LABELS = ["Position: Off", "Position: Selected", "Position: All"] as const;
+  const POS_MODE_COLORS = [
+    "bg-cream border-border text-muted hover:bg-cream2",
+    "bg-sage/15 border-sage/40 text-sage",
+    "bg-amber/20 border-amber/40 text-amber-900",
+  ] as const;
+  const POS_DOT_COLORS = ["bg-muted", "bg-sage", "bg-amber"] as const;
+
   return (
-    <div className="fixed inset-0 z-50 bg-cream/95 backdrop-blur-sm flex items-center justify-center p-3">
-      <div className="bg-cream2 border border-border rounded-2xl shadow-2xl w-full max-w-[1400px] h-[93vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex flex-col bg-cream2 overflow-hidden">
 
-        {/* ── Header ─────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="font-semibold text-sm">{symbol}</span>
-            {data?.data_source?.label && (
-              <span
-                title="The data source actually used for this run"
-                className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${
-                  data.data_source.provider === "mt5"
-                    ? "bg-sage/15 border-sage/40 text-sage"
-                    : "bg-amber/25 border-amber/50 text-amber-900"
-                }`}
+      {/* ── Header ────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0 bg-cream">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="font-semibold text-sm">{symbol}</span>
+          {data?.data_source?.label && (
+            <span title="Data source used" className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${data.data_source.provider === "mt5" ? "bg-sage/15 border-sage/40 text-sage" : "bg-amber/25 border-amber/50 text-amber-900"}`}>
+              {data.data_source.provider === "mt5" ? "● " : "⚠ "}{data.data_source.label}
+            </span>
+          )}
+
+          {/* Timeframe selector */}
+          <div className="flex items-center gap-1 bg-cream2 rounded-lg border border-border p-0.5">
+            <button
+              onClick={() => setLocalTf(timeframe)} disabled={busy}
+              title={localTf === timeframe ? `Strategy runs on ${timeframe}` : `Reset to strategy TF (${timeframe})`}
+              className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-all ${localTf === timeframe ? "bg-ink text-cream shadow-sm" : "bg-amber/30 text-amber-900 hover:bg-amber/50"}`}
+            >
+              {timeframe}
+            </button>
+            <span className="w-px h-3 bg-border mx-0.5 shrink-0" />
+            {TF_OPTIONS.filter(tf => tf !== timeframe).map((tf) => (
+              <button key={tf} onClick={() => setLocalTf(tf)} disabled={busy}
+                title={`View ${timeframe} trades on ${tf} candles`}
+                className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${localTf === tf ? "bg-ink text-cream shadow-sm" : "text-muted hover:text-ink"}`}
               >
-                {data.data_source.provider === "mt5" ? "● " : "⚠ "}{data.data_source.label}
-              </span>
-            )}
-            {/* View TF lever — swaps candle backdrop only; strategy result never changes.
-                Strategy TF pill acts as a reset anchor: click it to snap back. */}
-            <div className="flex items-center gap-1 bg-cream rounded-lg border border-border p-0.5">
-              {/* Strategy TF anchor — always visible; click to reset view back to strategy TF */}
-              <button
-                onClick={() => setLocalTf(timeframe)}
-                disabled={busy}
-                title={localTf === timeframe
-                  ? `Strategy runs on ${timeframe}`
-                  : `Click to reset view to strategy TF (${timeframe})`}
-                className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-all ${
-                  localTf === timeframe
-                    ? "bg-ink text-cream shadow-sm"
-                    : "bg-amber/30 text-amber-900 hover:bg-amber/50"
-                }`}
-              >
-                {timeframe}
+                {tf}
               </button>
-              {/* Divider */}
-              <span className="w-px h-3 bg-border mx-0.5 shrink-0" />
-              {/* View TF options — everything except the strategy TF */}
-              {TF_OPTIONS.filter(tf => tf !== timeframe).map((tf) => (
-                <button
-                  key={tf}
-                  onClick={() => setLocalTf(tf)}
-                  disabled={busy}
-                  title={`View ${timeframe} strategy trades on ${tf} candles`}
-                  className={`text-[10.5px] px-2 py-0.5 rounded-md font-medium transition-colors ${
-                    localTf === tf
-                      ? "bg-ink text-cream shadow-sm"
-                      : "text-muted hover:text-ink"
-                  }`}
-                >
-                  {tf}
-                </button>
-              ))}
-            </div>
-            {data && (
-              <>
-                <span className="text-muted text-xs">·</span>
-                <span className="text-xs text-muted" title={data.view_bars ? `${data.view_bars.length} view bars · ${data.bars.length} strategy bars` : `${data.bars.length} bars`}>
-                  {(data.view_bars ?? data.bars).length} bars
-                </span>
-                <span className="text-muted text-xs">·</span>
-                <span className="text-xs text-muted">{data.n_setups} setups</span>
-                <span className="text-muted text-xs">·</span>
-                <span className="text-xs font-semibold">{data.trades.length} trades</span>
-                {data.trades.length > 0 && (
-                  <>
-                    <span className="text-muted text-xs">·</span>
-                    <span className="text-xs font-medium text-sage">{wins}W</span>
-                    <span className="text-xs font-medium text-terra ml-0.5">{losses}L</span>
-                    <span className="text-muted text-xs">·</span>
-                    <span className={`text-xs font-semibold font-mono ${totalR >= 0 ? "text-sage" : "text-terra"}`}>
-                      {totalR >= 0 ? "+" : ""}{totalR.toFixed(1)}R
-                    </span>
-                  </>
-                )}
-              </>
-            )}
+            ))}
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Toggle pills */}
-            <button
-              onClick={() => setShowStructures((v) => !v)}
-              title="Show the structures the strategy uses — order-block zones, FVG gaps, swept liquidity levels"
-              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5
-                ${showStructures ? "bg-amber/25 border-amber/50 text-amber-900" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${showStructures ? "bg-amber" : "bg-muted"}`} />
-              Structures{data?.artifacts && data.artifacts.length > 0 ? ` (${data.artifacts.length})` : ""}
-            </button>
-            <button
-              onClick={() => setShowIndicators((v) => !v)}
-              title="Show the strategy's indicators (EMA, Donchian, Bollinger, VWAP, etc.) on the chart"
-              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5
-                ${showIndicators ? "bg-sage/15 border-sage/40 text-sage" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${showIndicators ? "bg-sage" : "bg-muted"}`} />
-              Indicators{data?.indicators && data.indicators.length > 0 ? ` (${data.indicators.length})` : ""}
-            </button>
-            <button
-              onClick={() => setShowZones((v) => !v)}
-              title="Show TradingView-style position boxes for every trade — green profit zone, red loss zone, entry/SL/TP lines"
-              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5
-                ${showZones ? "bg-sage/15 border-sage/40 text-sage" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${showZones ? "bg-sage" : "bg-muted"}`} />
-              Position tool
-            </button>
-            <button
-              onClick={() => setShowRibbon((v) => !v)}
-              title="Show a band at the bottom indicating when the strategy was in a long / short position"
-              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5
-                ${showRibbon ? "bg-amber/30 border-amber/50 text-amber-900" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${showRibbon ? "bg-amber" : "bg-muted"}`} />
-              Position ribbon
-            </button>
-
-            <div className="w-px h-5 bg-border mx-1" />
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-muted uppercase tracking-widest">Bars</span>
-              <input
-                type="number" value={nBars} min={100} max={20000} step={500}
-                onChange={(e) => setNBars(parseInt(e.target.value || String(defaultBars)))}
-                className="w-16 text-xs rounded bg-cream border border-border px-2 py-1 focus:outline-none focus:ring-1 focus:ring-sage"
-              />
-            </div>
-            <button onClick={onClose}
-              className="w-8 h-8 rounded-full hover:bg-cream flex items-center justify-center text-muted hover:text-ink text-xl leading-none transition-colors">
-              ×
-            </button>
-          </div>
+          {data && (
+            <>
+              <span className="text-muted text-xs">·</span>
+              <span className="text-xs text-muted">{(data.view_bars ?? data.bars).length} bars</span>
+              <span className="text-muted text-xs">·</span>
+              <span className="text-xs text-muted">{data.n_setups} setups</span>
+              <span className="text-muted text-xs">·</span>
+              <span className="text-xs font-semibold">{data.trades.length} trades</span>
+              {data.trades.length > 0 && (
+                <>
+                  <span className="text-muted text-xs">·</span>
+                  <span className="text-xs font-medium text-sage">{wins}W</span>
+                  <span className="text-xs font-medium text-terra ml-0.5">{losses}L</span>
+                  <span className="text-muted text-xs">·</span>
+                  <span className={`text-xs font-semibold font-mono ${totalR >= 0 ? "text-sage" : "text-terra"}`}>
+                    {totalR >= 0 ? "+" : ""}{totalR.toFixed(1)}R
+                  </span>
+                </>
+              )}
+            </>
+          )}
         </div>
 
-        {/* ── Body ────────────────────────────────────────────────────── */}
-        <div className="flex-1 flex min-h-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          {/* Toggle pills */}
+          <button onClick={() => setShowStructures((v) => !v)}
+            title="Show order-block zones, FVG gaps, swept liquidity levels"
+            className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5 ${showStructures ? "bg-amber/25 border-amber/50 text-amber-900" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${showStructures ? "bg-amber" : "bg-muted"}`} />
+            Structures{data?.artifacts && data.artifacts.length > 0 ? ` (${data.artifacts.length})` : ""}
+          </button>
 
-          {/* Chart */}
-          <div className="flex-1 relative min-w-0">
-            {busy && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-cream/80">
-                <div className="text-4xl animate-pulse mb-3">📊</div>
-                <div className="text-sm text-muted">Loading bars and simulating trades…</div>
-              </div>
-            )}
-            {err && (
-              <div className="absolute inset-0 flex items-center justify-center z-10 p-8">
-                <div className="bg-cream border border-border rounded-xl px-6 py-4 text-sm text-terra max-w-md text-center shadow-lg">
-                  {err}
-                </div>
-              </div>
-            )}
-            <div ref={containerRef} className="w-full h-full" />
+          <button onClick={() => setShowIndicators((v) => !v)}
+            title="Show strategy indicators (EMA, Donchian, Bollinger, VWAP…)"
+            className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5 ${showIndicators ? "bg-sage/15 border-sage/40 text-sage" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${showIndicators ? "bg-sage" : "bg-muted"}`} />
+            Indicators{data?.indicators && data.indicators.length > 0 ? ` (${data.indicators.length})` : ""}
+          </button>
 
-            {/* Replay readout — what's happening at the playhead bar */}
-            {replayInfo && (
-              <div className="absolute top-3 right-3 z-10 bg-cream2 border border-border rounded-lg shadow-md px-3 py-2 text-[11px] max-w-[260px]">
-                <div className="font-semibold text-ink mb-1">
-                  Bar {(replayIdx ?? 0) + 1} · {new Date((replayInfo.b.t as number) * 1000).toUTCString().slice(5, 22)}
-                </div>
-                <div className="font-mono text-muted mb-1">
-                  O {replayInfo.b.o.toFixed(2)} · H {replayInfo.b.h.toFixed(2)} · L {replayInfo.b.l.toFixed(2)} · C {replayInfo.b.c.toFixed(2)}
-                </div>
-                <div className="space-y-0.5">
-                  {replayInfo.entries.map((t, k) => (
-                    <div key={`e${k}`} className="font-medium" style={{ color: t.direction === "Bull" ? C.sage : C.terra }}>
-                      {t.direction === "Bull" ? "▲ Long entry" : "▼ Short entry"} @ {t.entry.toFixed(2)}
-                    </div>
-                  ))}
-                  {replayInfo.exits.map((t, k) => (
-                    <div key={`x${k}`} className="text-ink">✕ Exit ({t.exit_type || t.result}) · {t.pnl_r >= 0 ? "+" : ""}{t.pnl_r.toFixed(2)}R</div>
-                  ))}
-                  {replayInfo.levels.map((a, k) => (
-                    <div key={`l${k}`} className="text-amber-900">⚑ {a.label}</div>
-                  ))}
-                  {replayInfo.zones.length > 0 && (
-                    <div className="text-muted">In {replayInfo.zones.length} active zone{replayInfo.zones.length > 1 ? "s" : ""}</div>
-                  )}
-                  {replayInfo.entries.length === 0 && replayInfo.exits.length === 0 && replayInfo.levels.length === 0 && (
-                    <div className="text-muted italic">No trade here — waiting for a setup.</div>
-                  )}
-                </div>
-              </div>
-            )}
+          {/* 3-state position tool: Off → Selected only → All trades */}
+          <button
+            onClick={() => setPosMode((m) => ((m + 1) % 3) as 0 | 1 | 2)}
+            title={["Off — no position boxes", "Selected trade only — click a trade to see its box", "All trades — shows boxes for every trade"][posMode]}
+            className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5 ${POS_MODE_COLORS[posMode]}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${POS_DOT_COLORS[posMode]}`} />
+            {POS_MODE_LABELS[posMode]}
+          </button>
 
-            {/* Floating overlay: selected trade detail */}
-            {selTrade && (
-              <div className="absolute top-3 left-3 z-10 bg-cream2 border border-border rounded-lg shadow-md px-3 py-2 text-[11px] max-w-[280px]">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-semibold" style={{ color: selTrade.direction === "Bull" ? C.sage : C.terra }}>
-                    #{(selIdx ?? 0) + 1} · {selTrade.direction === "Bull" ? "▲ Long" : "▼ Short"}
+          <button onClick={() => setShowRibbon((v) => !v)}
+            title="Show position ribbon at the bottom (long/short/flat)"
+            className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5 ${showRibbon ? "bg-amber/30 border-amber/50 text-amber-900" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${showRibbon ? "bg-amber" : "bg-muted"}`} />
+            Ribbon
+          </button>
+
+          {/* Trade history toggle */}
+          <button
+            onClick={() => setShowTradeHistory((v) => !v)}
+            title={showTradeHistory ? "Collapse trade history" : "Show trade history"}
+            className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors flex items-center gap-1.5 ${showTradeHistory ? "bg-ink/10 border-ink/20 text-ink" : "bg-cream border-border text-muted hover:bg-cream2"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${showTradeHistory ? "bg-ink" : "bg-muted"}`} />
+            Trades{data ? ` (${data.trades.length})` : ""}
+          </button>
+
+          <div className="w-px h-5 bg-border mx-1" />
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-muted uppercase tracking-widest">Bars</span>
+            <input
+              type="number" value={nBars} min={100} max={20000} step={500}
+              onChange={(e) => setNBars(parseInt(e.target.value || String(defaultBars)))}
+              className="w-16 text-xs rounded bg-cream border border-border px-2 py-1 focus:outline-none focus:ring-1 focus:ring-sage"
+            />
+          </div>
+          <button onClick={onClose}
+            className="w-8 h-8 rounded-full hover:bg-cream2 flex items-center justify-center text-muted hover:text-ink text-xl leading-none transition-colors">
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* ── Body ──────────────────────────────────────────────────────── */}
+      <div className="flex-1 flex min-h-0">
+
+        {/* Chart */}
+        <div className="flex-1 relative min-w-0">
+          {busy && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-cream/80">
+              <div className="text-4xl animate-pulse mb-3">📊</div>
+              <div className="text-sm text-muted">Loading bars and simulating trades…</div>
+            </div>
+          )}
+          {err && (
+            <div className="absolute inset-0 flex items-center justify-center z-10 p-8">
+              <div className="bg-cream border border-border rounded-xl px-6 py-4 text-sm text-terra max-w-md text-center shadow-lg">{err}</div>
+            </div>
+          )}
+          <div ref={containerRef} className="w-full h-full" />
+
+          {/* Replay readout */}
+          {replayInfo && (
+            <div className="absolute top-3 right-3 z-10 bg-cream2 border border-border rounded-lg shadow-md px-3 py-2 text-[11px] max-w-[260px]">
+              <div className="font-semibold text-ink mb-1">
+                Bar {(replayIdx ?? 0) + 1} · {new Date((replayInfo.b.t as number) * 1000).toUTCString().slice(5, 22)}
+              </div>
+              <div className="font-mono text-muted mb-1">
+                O {replayInfo.b.o.toFixed(2)} · H {replayInfo.b.h.toFixed(2)} · L {replayInfo.b.l.toFixed(2)} · C {replayInfo.b.c.toFixed(2)}
+              </div>
+              <div className="space-y-0.5">
+                {replayInfo.entries.map((t, k) => (
+                  <div key={`e${k}`} className="font-medium" style={{ color: t.direction === "Bull" ? C.sage : C.terra }}>
+                    {t.direction === "Bull" ? "▲ Long entry" : "▼ Short entry"} @ {t.entry.toFixed(2)}
+                  </div>
+                ))}
+                {replayInfo.exits.map((t, k) => (
+                  <div key={`x${k}`} className="text-ink">✕ Exit ({t.exit_type || t.result}) · {t.pnl_r >= 0 ? "+" : ""}{t.pnl_r.toFixed(2)}R</div>
+                ))}
+                {replayInfo.levels.map((a, k) => (<div key={`l${k}`} className="text-amber-900">⚑ {a.label}</div>))}
+                {replayInfo.zones.length > 0 && (<div className="text-muted">In {replayInfo.zones.length} active zone{replayInfo.zones.length > 1 ? "s" : ""}</div>)}
+                {replayInfo.entries.length === 0 && replayInfo.exits.length === 0 && replayInfo.levels.length === 0 && (
+                  <div className="text-muted italic">No trade here — waiting for a setup.</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Selected trade overlay: editable position tool ── */}
+          {selTrade && selIdx !== null && (() => {
+            const e  = editEntry ?? selTrade.entry;
+            const s  = editSl    ?? selTrade.sl;
+            const t  = editTp    ?? tpPrice(selTrade, mgmt.target_r ?? 3);
+            const risk   = Math.abs(e - s);
+            const reward = Math.abs(t - e);
+            const rr     = risk > 0 ? reward / risk : 0;
+            const isBull = selTrade.direction === "Bull";
+            const validDir = isBull ? (t > e && e > s) : (t < e && e < s);
+            return (
+              <div className="absolute top-3 left-3 z-10 bg-cream2/95 border border-border rounded-xl shadow-lg px-3.5 py-3 text-[11px] w-[230px] backdrop-blur-sm">
+                {/* Title row */}
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="font-semibold text-[12px]" style={{ color: isBull ? C.sage : C.terra }}>
+                    #{selIdx + 1} · {isBull ? "▲ Long" : "▼ Short"}
                   </span>
-                  <span className="ml-auto font-mono font-semibold" style={{ color: tradeColor(selTrade) }}>
+                  <span className="ml-auto font-mono font-semibold text-[12px]" style={{ color: tradeColor(selTrade) }}>
                     {selTrade.pnl_r >= 0 ? "+" : ""}{selTrade.pnl_r.toFixed(2)}R
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted font-mono">
-                  <span>Entry</span><span className="text-ink">{selTrade.entry.toFixed(2)}</span>
-                  <span>SL</span>   <span className="text-terra">{selTrade.sl.toFixed(2)}</span>
-                  <span>TP {mgmt.target_r ?? 3}R</span><span className="text-sage">{tpPrice(selTrade, mgmt.target_r ?? 3).toFixed(2)}</span>
-                  <span>Exit</span> <span className="text-ink">{selTrade.exit_type || selTrade.result}</span>
-                </div>
-                <button onClick={() => setSelIdx(null)}
-                  className="text-[10px] text-muted hover:text-ink underline mt-1">
-                  Clear selection
-                </button>
-              </div>
-            )}
-          </div>
 
-          {/* Trade list */}
-          {data && data.trades.length > 0 && (
-            <div className="w-64 shrink-0 border-l border-border flex flex-col">
-              <div className="px-4 py-2.5 border-b border-border shrink-0">
+                {/* Editable price fields */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted w-10 shrink-0">Entry</span>
+                    <input
+                      type="number" step="0.01" value={e}
+                      onChange={(ev) => { const v = parseFloat(ev.target.value); if (!isNaN(v)) setEditEntry(v); }}
+                      className="flex-1 text-[11px] font-mono bg-cream border border-border rounded px-1.5 py-0.5 text-ink focus:outline-none focus:ring-1 focus:ring-ink/30 w-0"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-terra w-10 shrink-0">SL</span>
+                    <input
+                      type="number" step="0.01" value={s}
+                      onChange={(ev) => { const v = parseFloat(ev.target.value); if (!isNaN(v)) setEditSl(v); }}
+                      className="flex-1 text-[11px] font-mono bg-cream border border-terra/30 rounded px-1.5 py-0.5 text-terra focus:outline-none focus:ring-1 focus:ring-terra/30 w-0"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sage w-10 shrink-0">TP</span>
+                    <input
+                      type="number" step="0.01" value={t}
+                      onChange={(ev) => { const v = parseFloat(ev.target.value); if (!isNaN(v)) setEditTp(v); }}
+                      className="flex-1 text-[11px] font-mono bg-cream border border-sage/30 rounded px-1.5 py-0.5 text-sage focus:outline-none focus:ring-1 focus:ring-sage/30 w-0"
+                    />
+                  </div>
+                </div>
+
+                {/* Live R:R metrics */}
+                <div className="mt-2.5 pt-2 border-t border-border/60 grid grid-cols-3 gap-1 text-center">
+                  <div>
+                    <div className="text-[9px] text-muted uppercase tracking-wide mb-0.5">Risk</div>
+                    <div className="text-[11px] font-mono text-terra">{risk.toFixed(2)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-muted uppercase tracking-wide mb-0.5">Reward</div>
+                    <div className="text-[11px] font-mono text-sage">{reward.toFixed(2)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-muted uppercase tracking-wide mb-0.5">R:R</div>
+                    <div className={`text-[12px] font-mono font-bold ${!validDir ? "text-terra" : rr >= 2 ? "text-sage" : "text-amber"}`}>
+                      {validDir ? `1:${rr.toFixed(1)}` : "⚠"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 mt-2 pt-1.5 border-t border-border/40">
+                  <span className="text-[9px] text-muted uppercase tracking-wide">{selTrade.exit_type || selTrade.result}</span>
+                  <button
+                    onClick={() => { setEditEntry(selTrade.entry); setEditSl(selTrade.sl); setEditTp(tpPrice(selTrade, mgmt.target_r ?? 3)); }}
+                    className="text-[10px] text-muted hover:text-ink underline"
+                  >
+                    Reset
+                  </button>
+                  <button onClick={() => setSelIdx(null)} className="text-[10px] text-muted hover:text-ink underline ml-auto">
+                    Close
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* ── Trade history panel ─────────────────────────────────────── */}
+        {showTradeHistory && data && data.trades.length > 0 && (
+          <div className="w-64 shrink-0 border-l border-border flex flex-col bg-cream">
+            <div className="px-4 py-2.5 border-b border-border shrink-0 flex items-center justify-between">
+              <div>
                 <div className="text-xs font-semibold text-ink">Trade history</div>
-                <div className="text-[10px] text-muted mt-0.5">Click any trade to zoom + reveal levels</div>
+                <div className="text-[10px] text-muted mt-0.5">Click to zoom · edit position tool on the left</div>
               </div>
+              <button
+                onClick={() => setShowTradeHistory(false)}
+                title="Collapse trade history"
+                className="text-muted hover:text-ink text-lg leading-none px-1 shrink-0"
+              >
+                ›
+              </button>
+            </div>
 
-              <div className="flex-1 overflow-y-auto">
-                {data.trades.map((tr, i) => {
-                  const isSel  = selIdx === i;
-                  const col    = tradeColor(tr);
-                  const isBull = tr.direction === "Bull";
-                  const pnlStr = `${tr.pnl_r >= 0 ? "+" : ""}${tr.pnl_r.toFixed(1)}R`;
-                  return (
-                    <button key={i}
-                      onClick={() => setSelIdx(isSel ? null : i)}
-                      className={`w-full text-left px-4 py-2.5 border-b border-border/50 transition-all text-xs hover:bg-cream
-                        ${isSel ? "bg-cream border-l-[3px] border-l-sage" : "border-l-[3px] border-l-transparent"}`}
-                    >
-                      <div className="flex items-center justify-between mb-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-muted font-mono text-[10px]">#{i + 1}</span>
-                          <span className="font-semibold text-[11px]"
-                            style={{ color: isBull ? C.sage : C.terra }}>
-                            {isBull ? "▲" : "▼"} {tr.entry.toFixed(2)}
-                          </span>
-                        </div>
-                        <span className="font-semibold font-mono text-[11px]" style={{ color: col }}>
-                          {pnlStr}
+            <div className="flex-1 overflow-y-auto">
+              {data.trades.map((tr, i) => {
+                const isSel  = selIdx === i;
+                const col    = tradeColor(tr);
+                const isBull = tr.direction === "Bull";
+                const pnlStr = `${tr.pnl_r >= 0 ? "+" : ""}${tr.pnl_r.toFixed(1)}R`;
+                return (
+                  <button key={i}
+                    onClick={() => setSelIdx(isSel ? null : i)}
+                    className={`w-full text-left px-4 py-2.5 border-b border-border/50 transition-all text-xs hover:bg-cream2
+                      ${isSel ? "bg-cream2 border-l-[3px] border-l-sage" : "border-l-[3px] border-l-transparent"}`}
+                  >
+                    <div className="flex items-center justify-between mb-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-muted font-mono text-[10px]">#{i + 1}</span>
+                        <span className="font-semibold text-[11px]" style={{ color: isBull ? C.sage : C.terra }}>
+                          {isBull ? "▲" : "▼"} {tr.entry.toFixed(2)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-muted">
-                        <span>SL <span className="font-mono">{tr.sl.toFixed(2)}</span></span>
-                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium"
-                          style={{ background: col + "22", color: col }}>
-                          {tr.exit_type || tr.result}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      <span className="font-semibold font-mono text-[11px]" style={{ color: col }}>{pnlStr}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-muted">
+                      <span>SL <span className="font-mono">{tr.sl.toFixed(2)}</span></span>
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium" style={{ background: col + "22", color: col }}>
+                        {tr.exit_type || tr.result}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
 
-              <div className="px-4 py-2.5 border-t border-border shrink-0 bg-cream/60">
-                <div className="flex justify-between text-[10px] text-muted">
-                  <span>Win: <strong className="text-sage">{wins}</strong></span>
-                  <span>Loss: <strong className="text-terra">{losses}</strong></span>
-                  <span>Net: <strong style={{ color: totalR >= 0 ? C.sage : C.terra }}>
-                    {totalR >= 0 ? "+" : ""}{totalR.toFixed(1)}R
-                  </strong></span>
-                </div>
+            <div className="px-4 py-2.5 border-t border-border shrink-0 bg-cream/80">
+              <div className="flex justify-between text-[10px] text-muted">
+                <span>Win: <strong className="text-sage">{wins}</strong></span>
+                <span>Loss: <strong className="text-terra">{losses}</strong></span>
+                <span>Net: <strong style={{ color: totalR >= 0 ? C.sage : C.terra }}>{totalR >= 0 ? "+" : ""}{totalR.toFixed(1)}R</strong></span>
               </div>
             </div>
-          )}
-        </div>
-
-        {/* ── Replay controls ──────────────────────────────────────────── */}
-        {data && data.bars.length > 0 && (
-          <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/40 flex items-center gap-3">
-            <button
-              onClick={() => { if (replayIdx == null) setReplayIdx(0); setPlaying((p) => !p); }}
-              className="text-xs px-3 py-1 rounded-md bg-ink text-cream font-medium hover:opacity-90 transition-opacity shrink-0">
-              {playing ? "⏸ Pause" : "▶ Play"}
-            </button>
-            <input
-              type="range" min={0} max={data.bars.length - 1}
-              value={replayIdx ?? data.bars.length - 1}
-              onChange={(e) => { setPlaying(false); setReplayIdx(parseInt(e.target.value)); }}
-              className="flex-1 accent-sage"
-              title="Scrub through the strategy bar-by-bar"
-            />
-            <span className="text-[10px] text-muted font-mono w-28 text-right shrink-0">
-              {replayIdx == null ? "Live (all bars)" : `bar ${replayIdx + 1} / ${data.bars.length}`}
-            </span>
-            {replayIdx != null && (
-              <button
-                onClick={() => { setReplayIdx(null); setPlaying(false); }}
-                className="text-xs px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-cream shrink-0">
-                Reset
-              </button>
-            )}
           </div>
         )}
+      </div>
 
-        {/* ── Legend ───────────────────────────────────────────────────── */}
-        <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/50 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted">
-          <span className="flex items-center gap-1.5">
-            <span className="text-[10px]" style={{ color: C.sage }}>▲</span> Long entry
+      {/* ── Replay controls ────────────────────────────────────────────── */}
+      {data && data.bars.length > 0 && (
+        <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/60 flex items-center gap-3">
+          <button
+            onClick={() => { if (replayIdx == null) setReplayIdx(0); setPlaying((p) => !p); }}
+            className="text-xs px-3 py-1 rounded-md bg-ink text-cream font-medium hover:opacity-90 transition-opacity shrink-0">
+            {playing ? "⏸ Pause" : "▶ Play"}
+          </button>
+          <input
+            type="range" min={0} max={data.bars.length - 1}
+            value={replayIdx ?? data.bars.length - 1}
+            onChange={(e) => { setPlaying(false); setReplayIdx(parseInt(e.target.value)); }}
+            className="flex-1 accent-sage"
+          />
+          <span className="text-[10px] text-muted font-mono w-28 text-right shrink-0">
+            {replayIdx == null ? "Live (all bars)" : `bar ${replayIdx + 1} / ${data.bars.length}`}
           </span>
-          <span className="flex items-center gap-1.5">
-            <span className="text-[10px]" style={{ color: C.terra }}>▼</span> Short entry
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.sage }} /> Win exit
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: C.terra }} /> Loss exit
-          </span>
-          {showZones && (
-            <>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 h-3 rounded-sm" style={{ background: "rgba(107,155,122,0.30)" }} /> Profit zone (entry→TP)
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 h-3 rounded-sm" style={{ background: "rgba(201,123,99,0.30)" }} /> Loss zone (SL→entry)
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 border-t" style={{ borderColor: C.ink }} /> Entry
-              </span>
-            </>
+          {replayIdx != null && (
+            <button
+              onClick={() => { setReplayIdx(null); setPlaying(false); }}
+              className="text-xs px-2 py-1 rounded border border-border text-muted hover:text-ink hover:bg-cream shrink-0">
+              Reset
+            </button>
           )}
-          {showIndicators && data?.indicators && data.indicators.map((ind) => (
-            <span key={ind.id} className="flex items-center gap-1.5">
-              <span
-                className="inline-block w-5"
-                style={{
-                  borderTop:    `${ind.line_width}px ${ind.line_style} ${ind.color}`,
-                }}
-              />
-              {ind.label}
-            </span>
-          ))}
-          <span className="ml-auto italic">Click row → zoom + show levels · Scroll → zoom · Drag → pan</span>
         </div>
+      )}
+
+      {/* ── Legend ─────────────────────────────────────────────────────── */}
+      <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/70 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted">
+        <span className="flex items-center gap-1.5"><span style={{ color: C.sage }}>▲</span> Long entry</span>
+        <span className="flex items-center gap-1.5"><span style={{ color: C.terra }}>▼</span> Short entry</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: C.sage }} /> Win exit</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: C.terra }} /> Loss exit</span>
+        {posMode > 0 && (
+          <>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 h-3 rounded-sm" style={{ background: "rgba(107,155,122,0.30)" }} /> Profit zone</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 h-3 rounded-sm" style={{ background: "rgba(201,123,99,0.30)" }} /> Loss zone</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-5 border-t" style={{ borderColor: C.ink }} /> Entry</span>
+          </>
+        )}
+        {showIndicators && data?.indicators && data.indicators.map((ind) => (
+          <span key={ind.id} className="flex items-center gap-1.5">
+            <span className="inline-block w-5" style={{ borderTop: `${ind.line_width}px ${ind.line_style} ${ind.color}` }} />
+            {ind.label}
+          </span>
+        ))}
+        <span className="ml-auto italic">Click trade → zoom + edit position tool · Scroll → zoom · Drag → pan</span>
       </div>
     </div>
   );

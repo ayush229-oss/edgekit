@@ -94,7 +94,7 @@ class OBFVGLiquidity(Strategy):
                         if risk > 0:
                             tp_prices = [(entry + r * risk, q) for r, q in tps_param]
                             setups.append(dict(
-                                signal_idx = i,
+                                signal_idx = i + 1,
                                 direction  = "Bull",
                                 entry      = entry,
                                 sl         = entry - risk,
@@ -124,7 +124,7 @@ class OBFVGLiquidity(Strategy):
                         if risk > 0:
                             tp_prices = [(entry - r * risk, q) for r, q in tps_param]
                             setups.append(dict(
-                                signal_idx = i,
+                                signal_idx = i + 1,
                                 direction  = "Bear",
                                 entry      = entry,
                                 sl         = entry + risk,

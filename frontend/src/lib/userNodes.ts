@@ -160,9 +160,11 @@ export function toV2NodeSpec(def: UserNodeDef): V2NodeSpec {
   let inputs: V2NodeSpec["inputs"] = [];
   let outputs: V2NodeSpec["outputs"] = [];
 
+  const extraInputs = def.extra_inputs ?? [];
+
   if (def.lane === "indicator") {
-    inputs  = def.extra_inputs.map((p) => ({ name: p.name, type: p.type as any }));
-    outputs = def.outputs.map((p) => ({ name: p.name, type: p.type as any }));
+    inputs  = extraInputs.map((p) => ({ name: p.name, type: p.type as any }));
+    outputs = (def.outputs ?? []).map((p) => ({ name: p.name, type: p.type as any }));
   } else {
     // Standard inputs per lane
     const stdInputs: Record<string, { name: string; type: string } | null> = {
@@ -176,7 +178,7 @@ export function toV2NodeSpec(def: UserNodeDef): V2NodeSpec {
     if (stdInput) {
       inputs = [{ name: stdInput.name, type: stdInput.type as any }];
     }
-    inputs = [...inputs, ...def.extra_inputs.map((p) => ({ name: p.name, type: p.type as any }))];
+    inputs = [...inputs, ...extraInputs.map((p) => ({ name: p.name, type: p.type as any }))];
 
     // Standard outputs per lane
     const stdOutput: Record<string, { name: string; type: string }> = {
@@ -197,7 +199,7 @@ export function toV2NodeSpec(def: UserNodeDef): V2NodeSpec {
     description: def.description,
     inputs,
     outputs,
-    params:      def.params_spec.map((p) => ({
+    params:      (def.params_spec ?? []).map((p) => ({
       key:         p.key,
       label:       p.label,
       type:        p.type,

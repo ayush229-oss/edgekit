@@ -26,7 +26,7 @@ Register-ScheduledTask `
     -User $user -RunLevel Highest -Force | Out-Null
 
 # Frontend
-$feCmd = 'Set-Location C:\Users\Ayush\projects\edgekit\frontend; npx next start -p 3000'
+$feCmd = 'Set-Location C:\Users\Ayush\projects\edgekit\frontend; npx next dev -p 3000'
 $feAction = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
     -Argument "-NoProfile -WindowStyle Hidden -Command `"$feCmd`""

@@ -5,6 +5,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 export const metadata: Metadata = {
   title: "Edgekit — Backtest any strategy, any market",
   description: "No-code visual strategy builder. Find your trader's edge with sliders, not code.",
+  icons: { icon: "/edgekit-logo-icon.svg" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

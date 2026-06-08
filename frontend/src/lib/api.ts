@@ -406,6 +406,21 @@ async function readApiError(r: Response): Promise<string> {
   }
 }
 
+export async function v2NodeChat(body: {
+  messages: ChatMessage[];
+}): Promise<{ type: "message"; content: string } | { type: "node_def"; def: any }> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const ai = getUserAIKey();
+  if (ai) { headers["X-AI-Key"] = ai.key; headers["X-AI-Provider"] = ai.provider; }
+  const model = getAIModel();
+  if (model) headers["X-AI-Model"] = model;
+  const r = await efetch(`${API_URL}/graph/v2/node-chat`, {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
+  return r.json();
+}
+
 export async function v2NodeFromText(description: string): Promise<{
   label: string; description: string; lane: "indicator";
   outputs: { name: string; type: "number" | "series" }[];

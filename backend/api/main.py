@@ -111,10 +111,8 @@ app.add_middleware(
 # /healthz stays public so uptime monitors (UptimeRobot) can probe it.
 _API_KEY = _os.environ.get("EDGEKIT_API_KEY", "")
 # /healthz: public for uptime monitors.
-# /internal/deploy: temporarily public so GitHub Actions auto-deploy keeps
-#   working until the EDGEKIT_API_KEY GitHub secret is added (then remove it
-#   here to lock the deploy webhook too).
-_KEY_PUBLIC_PATHS = {"/healthz", "/internal/deploy"}
+# /internal/deploy: protected — CI sends X-API-Key via EDGEKIT_API_KEY secret.
+_KEY_PUBLIC_PATHS = {"/healthz"}
 
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):

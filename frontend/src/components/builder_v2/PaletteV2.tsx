@@ -11,42 +11,49 @@ import { useEffect, useState } from "react";
 import type { V2NodeSpec, V2Lane } from "@/lib/api";
 import { LANE_META, PORT_COLORS, laneAccentColor } from "./portColors";
 import {
-  listCustomNodes, deleteCustomNode, onCustomNodesChange,
-  type CustomNode,
-} from "@/lib/customNodes";
-import {
-  listUserNodes, deleteUserNode, onUserNodesChange, toV2NodeSpec,
-  type UserNodeDef,
+  listUserNodes, deleteUserNode, saveUserNode, onUserNodesChange, toV2NodeSpec,
+  LANE_COLORS, type UserNodeDef, type UserLane,
 } from "@/lib/userNodes";
 
 
 export function PaletteV2({
-  library, onAdd, onAddCustomNode, onOpenCustomNodeBuilder,
+  library, onAdd,
   onAddUserNode, onOpenUserNodeBuilder,
   minimized, onToggleMinimized,
 }: {
-  library:                  V2NodeSpec[];
-  onAdd:                    (spec: V2NodeSpec) => void;
-  onAddCustomNode:          (cn: CustomNode) => void;
-  onOpenCustomNodeBuilder:  () => void;
-  onAddUserNode:            (def: UserNodeDef) => void;
-  onOpenUserNodeBuilder:    () => void;
-  minimized:                boolean;
-  onToggleMinimized:        () => void;
+  library:               V2NodeSpec[];
+  onAdd:                 (spec: V2NodeSpec) => void;
+  onAddUserNode:         (def: UserNodeDef) => void;
+  onOpenUserNodeBuilder: () => void;
+  minimized:             boolean;
+  onToggleMinimized:     () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-
-  const [customNodes, setCustomNodes] = useState<CustomNode[]>([]);
-  useEffect(() => {
-    setCustomNodes(listCustomNodes());
-    return onCustomNodesChange(() => setCustomNodes(listCustomNodes()));
-  }, []);
 
   const [userNodes, setUserNodes] = useState<UserNodeDef[]>([]);
   useEffect(() => {
     setUserNodes(listUserNodes());
     return onUserNodesChange(() => setUserNodes(listUserNodes()));
   }, []);
+
+  // Inline edit state
+  const [editId,    setEditId]    = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editDesc,  setEditDesc]  = useState("");
+
+  function startEdit(un: UserNodeDef, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditId(un.id);
+    setEditLabel(un.label);
+    setEditDesc(un.description ?? "");
+  }
+
+  function saveEdit() {
+    if (!editId) return;
+    const node = userNodes.find((n) => n.id === editId);
+    if (node) saveUserNode({ ...node, label: editLabel.trim() || node.label, description: editDesc.trim(), id: editId });
+    setEditId(null);
+  }
 
   const lanes = (Object.keys(LANE_META) as V2Lane[])
     .sort((a, b) => LANE_META[a].order - LANE_META[b].order);
@@ -91,116 +98,100 @@ export function PaletteV2({
         </button>
       </div>
 
-      {/* ── My Custom Nodes (AI-generated, user-saved) ──────────────────── */}
-      <div className="border-b border-border bg-money/[0.03]">
+      {/* ── My Custom Nodes ─────────────────────────────────────────────── */}
+      <div className="border-b border-border bg-sage/[0.03]">
         <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-          <span className="w-1.5 h-3 rounded-sm bg-money" />
-          <span className="text-xs uppercase tracking-widest text-muted flex-1">My Custom Nodes</span>
-          <span className="text-[10px] text-muted">{customNodes.length}</span>
-        </div>
-
-        <button
-          onClick={onOpenCustomNodeBuilder}
-          className="w-full mx-0 px-4 py-2 text-left text-[12px] text-money hover:bg-money/10 transition-colors
-                     flex items-center gap-1.5 font-medium"
-        >
-          <span className="text-base leading-none">✨</span>
-          Create with AI…
-        </button>
-
-        {customNodes.length > 0 && (
-          <ul className="pb-1">
-            {customNodes.map((cn) => (
-              <li key={cn.id} className="group">
-                <div className="flex items-stretch hover:bg-cream transition-colors">
-                  <button
-                    onClick={() => onAddCustomNode(cn)}
-                    className="flex-1 text-left px-4 py-2"
-                    title={cn.description || cn.name}
-                  >
-                    <div className="text-sm font-medium leading-tight">{cn.name}</div>
-                    {cn.description && (
-                      <div className="text-[10px] text-muted leading-snug mt-0.5 line-clamp-2">
-                        {cn.description}
-                      </div>
-                    )}
-                    <div className="text-[9px] text-muted mt-0.5 font-mono">
-                      {cn.graph.nodes.length} nodes
-                    </div>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`Delete custom node "${cn.name}"?`)) deleteCustomNode(cn.id);
-                    }}
-                    title="Delete this custom node"
-                    className="px-2 text-muted hover:text-down opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    ×
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {customNodes.length === 0 && (
-          <p className="px-4 pb-3 text-[10px] text-muted italic leading-snug">
-            Describe a piece of logic, get back a reusable node. Lives in your browser only.
-          </p>
-        )}
-      </div>
-
-      {/* ── My Custom Nodes (user-built, any lane) ───────────────────── */}
-      <div className="border-b border-border bg-ink/[0.02]">
-        <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-          <span className="w-1.5 h-3 rounded-sm bg-muted" />
+          <span className="w-1.5 h-3 rounded-sm bg-sage" />
           <span className="text-xs uppercase tracking-widest text-muted flex-1">My Custom Nodes</span>
           <span className="text-[10px] text-muted">{userNodes.length}</span>
         </div>
 
         <button
           onClick={onOpenUserNodeBuilder}
-          className="w-full px-4 py-2 text-left text-[12px] text-muted hover:bg-cream/60 transition-colors
+          className="w-full px-4 py-2 text-left text-[12px] text-sage hover:bg-sage/10 transition-colors
                      flex items-center gap-1.5 font-medium"
         >
-          <span className="text-sm leading-none">✨</span>
+          <span className="text-base leading-none">✨</span>
           Create with AI…
         </button>
+
+        {/* Inline edit form */}
+        {editId && (
+          <div className="mx-3 mb-2 p-2.5 rounded-lg border border-sage/30 bg-sage/5 space-y-2">
+            <input
+              value={editLabel}
+              onChange={(e) => setEditLabel(e.target.value)}
+              placeholder="Node name"
+              className="w-full text-[12px] bg-paper border border-border rounded px-2 py-1.5
+                         focus:outline-none focus:ring-1 focus:ring-sage"
+              autoFocus
+            />
+            <input
+              value={editDesc}
+              onChange={(e) => setEditDesc(e.target.value)}
+              placeholder="Short description (optional)"
+              className="w-full text-[11px] bg-paper border border-border rounded px-2 py-1
+                         focus:outline-none focus:ring-1 focus:ring-sage text-muted"
+            />
+            <div className="flex gap-1.5">
+              <button onClick={saveEdit}
+                className="flex-1 text-[11px] py-1 rounded bg-sage text-white font-medium hover:bg-sageMid transition-colors">
+                Save
+              </button>
+              <button onClick={() => setEditId(null)}
+                className="px-2 text-[11px] py-1 rounded border border-border text-muted hover:bg-cream transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {userNodes.length > 0 && (
           <ul className="pb-1">
             {userNodes.map((un) => (
               <li key={un.id} className="group">
-                <div className="flex items-stretch hover:bg-cream transition-colors">
-                  <button
-                    onClick={() => onAddUserNode(un)}
-                    className="flex-1 text-left px-4 py-2"
-                    title={un.description || un.label}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <div className="text-sm font-medium leading-tight">{un.label}</div>
-                    </div>
-                    {un.description && (
-                      <div className="text-[10px] text-muted leading-snug mt-0.5 line-clamp-1">
-                        {un.description}
+                {editId === un.id ? null : (
+                  <div className="flex items-stretch hover:bg-cream transition-colors">
+                    <button
+                      onClick={() => onAddUserNode(un)}
+                      className="flex-1 text-left px-4 py-2 min-w-0"
+                      title={un.description || un.label}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="w-2 h-2 rounded-full shrink-0"
+                          style={{ background: LANE_COLORS[un.lane as UserLane] ?? "#6B7280" }} />
+                        <div className="text-[12.5px] font-medium leading-tight truncate">{un.label}</div>
                       </div>
-                    )}
-                    <div className="text-[9px] text-muted mt-0.5 font-mono uppercase tracking-wide">
-                      {un.lane}
-                    </div>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`Delete "${un.label}"?`)) deleteUserNode(un.id);
-                    }}
-                    title="Delete"
-                    className="px-2 text-muted hover:text-down opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    ×
-                  </button>
-                </div>
+                      {un.description && (
+                        <div className="text-[10px] text-muted leading-snug mt-0.5 line-clamp-1 pl-3.5">
+                          {un.description}
+                        </div>
+                      )}
+                      <div className="text-[9px] text-muted mt-0.5 font-mono uppercase tracking-wide pl-3.5">
+                        {un.lane}
+                      </div>
+                    </button>
+                    {/* Edit button */}
+                    <button
+                      onClick={(e) => startEdit(un, e)}
+                      title="Edit name / description"
+                      className="px-1.5 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-opacity text-[11px]"
+                    >
+                      ✎
+                    </button>
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Delete "${un.label}"?`)) deleteUserNode(un.id);
+                      }}
+                      title="Delete"
+                      className="px-2 text-muted hover:text-down opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -208,7 +199,7 @@ export function PaletteV2({
 
         {userNodes.length === 0 && (
           <p className="px-4 pb-3 text-[10px] text-muted italic leading-snug">
-            Build any node — indicator, signal, filter, sizing, risk, or exit logic.
+            Describe any node — indicator, signal, filter, sizing, risk, or exit. The AI builds it.
           </p>
         )}
       </div>
@@ -268,3 +259,4 @@ export function PaletteV2({
     </div>
   );
 }
+

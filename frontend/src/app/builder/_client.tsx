@@ -245,7 +245,7 @@ function BuilderInner() {
   // ── Bootstrap: library + templates + symbols ──────────────────────────
   useEffect(() => {
     v2ListNodes().then(setLibrary).catch((e) => setErr(String(e)));
-    v2ListTemplates().then(setTemplates).catch(() => {});
+    v2ListTemplates().then(setTemplates).catch((e) => console.warn("templates:", e));
     v2ListSymbols().then((r) => {
       setSymbols(r.symbols);
       setSymbolSource(r.source);
