@@ -78,11 +78,17 @@ jobs:
       - name: Deploy to Vercel production
         id: deploy
         run: |
-          url=$(vercel --prod --yes --token "$VERCEL_TOKEN" 2>&1 | grep -o 'https://frontend-[^ ]*\.vercel\.app' | tail -1)
+          output=$(vercel --prod --yes --token "$VERCEL_TOKEN" 2>&1)
+          echo "$output"
+          url=$(echo "$output" | grep -o 'https://[^ ]*\.vercel\.app' | tail -1)
+          if [ -z "$url" ]; then
+            echo "ERROR: could not extract deployment URL from vercel output"
+            exit 1
+          fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed: $url"
 
       - name: Alias to edgekit.uk
         run: |
-          vercel alias "${{ steps.deploy.outputs.url }}" edgekit.uk --token "$VERCEL_TOKEN" --scope "$VERCEL_ORG_ID"
-          vercel alias "${{ steps.deploy.outputs.url }}" www.edgekit.uk --token "$VERCEL_TOKEN" --scope "$VERCEL_ORG_ID"
+          vercel alias "${{ steps.deploy.outputs.url }}" edgekit.uk --token "$VERCEL_TOKEN"
+          vercel alias "${{ steps.deploy.outputs.url }}" www.edgekit.uk --token "$VERCEL_TOKEN"
