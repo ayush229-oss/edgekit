@@ -230,6 +230,8 @@ export function ChartPreview({
   const chartRef         = useRef<IChartApi | null>(null);
   const candlesRef       = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const markersRef       = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const allMarkersRef    = useRef<any[]>([]);
+  const lastViewCutoffRef = useRef<number | null>(null);
   const posBoxPrimRef    = useRef<PositionBoxesPrimitive | null>(null);
   const ribbonRef        = useRef<ISeriesApi<"Histogram"> | null>(null);
   const indicatorRefs    = useRef<ISeriesApi<"Line">[]>([]);
@@ -256,6 +258,7 @@ export function ChartPreview({
   // Replay
   const [replayIdx, setReplayIdx] = useState<number | null>(null);
   const [playing,   setPlaying]   = useState(false);
+  const [speed,     setSpeed]     = useState<number>(1);
 
   // Editable position tool — live entry/SL/TP for the selected trade
   const [editEntry, setEditEntry] = useState<number | null>(null);
@@ -343,6 +346,7 @@ export function ChartPreview({
       }
     });
     markers.sort((a, b) => (a.time as number) - (b.time as number));
+    allMarkersRef.current = markers;
     markersRef.current = createSeriesMarkers(candles, markers);
 
     const ro = new ResizeObserver(() => {
@@ -358,6 +362,7 @@ export function ChartPreview({
       zonesPrimRef.current = null; posBoxPrimRef.current = null;
       ribbonRef.current = null; indicatorRefs.current = [];
       selPriceLinesRef.current = [];
+      lastViewCutoffRef.current = null;
       chart.remove(); chartRef.current = null;
     };
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -527,17 +532,69 @@ export function ChartPreview({
         if (next >= max) { setPlaying(false); return max; }
         return next;
       });
-    }, 140);
+    }, Math.round(140 / speed));
     return () => clearInterval(id);
-  }, [playing, data]);
+  }, [playing, data, speed]);
 
   useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || !data || data.bars.length === 0) return;
-    if (replayIdx == null) { chart.timeScale().fitContent(); return; }
-    const from = data.bars[Math.max(0, replayIdx - 120)];
-    const to   = data.bars[replayIdx];
-    if (from && to) chart.timeScale().setVisibleRange({ from: from.t as UTCTimestamp, to: to.t as UTCTimestamp });
+    const chart   = chartRef.current;
+    const candles = candlesRef.current;
+    if (!chart || !candles || !data || data.bars.length === 0) return;
+
+    const displayBars = data.view_bars ?? data.bars;
+
+    if (replayIdx == null) {
+      if (lastViewCutoffRef.current !== null) {
+        // Was in replay — restore all bars and markers
+        candles.setData(displayBars.map(b => ({ time: b.t as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c })));
+        markersRef.current?.setMarkers(allMarkersRef.current);
+        lastViewCutoffRef.current = null;
+      }
+      chart.timeScale().fitContent();
+      return;
+    }
+
+    const stratBar = data.bars[replayIdx];
+    if (!stratBar) return;
+
+    // Map strategy bar → view bar cutoff index
+    const viewCutoff = (() => {
+      if (!data.view_bars) return replayIdx + 1;
+      const idx = data.view_bars.findIndex(b => (b.t as number) > (stratBar.t as number));
+      return idx === -1 ? data.view_bars.length : idx;
+    })();
+
+    const lastCutoff = lastViewCutoffRef.current;
+
+    if (lastCutoff !== null && viewCutoff > lastCutoff && viewCutoff - lastCutoff <= 10) {
+      // Incremental advance during playback — append only the new bars
+      for (let i = lastCutoff; i < viewCutoff; i++) {
+        const b = displayBars[i];
+        if (b) candles.update({ time: b.t as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c });
+      }
+    } else {
+      // Full reset — scrubbing backward or entering replay mode
+      candles.setData(displayBars.slice(0, viewCutoff).map(b => ({
+        time: b.t as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c,
+      })));
+    }
+    lastViewCutoffRef.current = viewCutoff;
+
+    // Clip markers to bars at or before the current strategy bar
+    const clippedMarkers = allMarkersRef.current.filter(m => (m.time as number) <= (stratBar.t as number));
+    markersRef.current?.setMarkers(clippedMarkers);
+
+    // Center the current bar: show halfWindow bars of history + halfWindow bars of future empty space
+    const halfWindow = 80;
+    const fromBar = displayBars[Math.max(0, viewCutoff - halfWindow)];
+    const lastBar = displayBars[viewCutoff - 1];
+    if (!fromBar || !lastBar) return;
+    const prevBar = displayBars[Math.max(0, viewCutoff - 2)];
+    const barSpacingSec = viewCutoff >= 2
+      ? (lastBar.t as number) - (prevBar.t as number)
+      : 3600;
+    const futureT = (lastBar.t as number) + barSpacingSec * halfWindow;
+    chart.timeScale().setVisibleRange({ from: fromBar.t as UTCTimestamp, to: futureT as UTCTimestamp });
   }, [replayIdx, data]);
 
   const replayInfo = useMemo(() => {
@@ -872,6 +929,18 @@ export function ChartPreview({
       {/* ── Replay controls ────────────────────────────────────────────── */}
       {data && data.bars.length > 0 && (
         <div className="px-5 py-2 border-t border-border shrink-0 bg-cream/60 flex items-center gap-3">
+          {/* Speed control */}
+          <div className="flex items-center gap-0.5 bg-cream2 rounded border border-border p-0.5 shrink-0">
+            {([0.5, 1, 2, 4] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSpeed(s)}
+                className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${speed === s ? "bg-ink text-cream" : "text-muted hover:text-ink"}`}
+              >
+                {s === 0.5 ? "½x" : `${s}x`}
+              </button>
+            ))}
+          </div>
           <button
             onClick={() => { if (replayIdx == null) setReplayIdx(0); setPlaying((p) => !p); }}
             className="text-xs px-3 py-1 rounded-md bg-ink text-cream font-medium hover:opacity-90 transition-opacity shrink-0">
