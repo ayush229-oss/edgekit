@@ -231,7 +231,7 @@ class ReplayStartLineRenderer {
       ctx.setLineDash([6 * hr, 4 * hr]);
       ctx.beginPath();
       ctx.moveTo(x * hr, 0);
-      ctx.lineTo(x * hr, scope.bitmapSize.height);
+      ctx.lineTo(x * hr, scope.context.canvas.height);
       ctx.stroke();
       ctx.setLineDash([]);
     });
