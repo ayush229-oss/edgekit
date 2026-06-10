@@ -65,24 +65,19 @@ jobs:
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_PROJECT_ID: prj_t19N5s9UEPutCLmGPTRZ9kt01XAM
-      VERCEL_TEAM_ID: team_9WNLaWQuLtQTeqTAiRXE0o8J
+      VERCEL_ORG_ID: team_9WNLaWQuLtQTeqTAiRXE0o8J
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      - name: Wait for Vercel deployment and alias
+      - name: Write Vercel project config
+        run: mkdir -p frontend/.vercel && printf '{"projectId":"%s","orgId":"%s"}' "$VERCEL_PROJECT_ID" "$VERCEL_ORG_ID" > frontend/.vercel/project.json
+
+      - name: Deploy to Vercel and alias edgekit.uk
         run: |
-          echo "Waiting for Vercel to finish deploying commit $GITHUB_SHA..."
-          for i in $(seq 1 40); do
-            URL=$(curl -s "https://api.vercel.com/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_TEAM_ID&limit=10" -H "Authorization: Bearer $VERCEL_TOKEN" | python3 -c "import sys,json; deps=json.load(sys.stdin).get('deployments',[]); sha='$GITHUB_SHA'; url=next(('https://'+d['url'] for d in deps if d.get('state')=='READY' and d.get('target')=='production' and d.get('meta',{}).get('githubCommitSha','').startswith(sha[:12])),''); print(url)")
-            if [ -n "$URL" ]; then
-              echo "Deployment ready: $URL"
-              vercel alias "$URL" edgekit.uk --token "$VERCEL_TOKEN"
-              vercel alias "$URL" www.edgekit.uk --token "$VERCEL_TOKEN"
-              exit 0
-            fi
-            echo "  attempt $i/40 — not ready yet, waiting 15s..."
-            sleep 15
-          done
-          echo "ERROR: timed out waiting for Vercel deployment of $GITHUB_SHA"
-          exit 1
+          DEPLOY_URL=$(vercel --prod --cwd frontend --token "$VERCEL_TOKEN" --yes 2>&1 | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -1)
+          echo "Deploy URL: $DEPLOY_URL"
+          vercel alias "$DEPLOY_URL" edgekit.uk --token "$VERCEL_TOKEN"
+          vercel alias "$DEPLOY_URL" www.edgekit.uk --token "$VERCEL_TOKEN"
