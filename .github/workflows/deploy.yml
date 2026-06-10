@@ -77,7 +77,12 @@ jobs:
 
       - name: Deploy to Vercel and alias edgekit.uk
         run: |
-          DEPLOY_URL=$(vercel --prod --cwd frontend --token "$VERCEL_TOKEN" --yes 2>&1 | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -1)
+          VERCEL_OUT=$(vercel --prod --cwd frontend --token "$VERCEL_TOKEN" --yes 2>&1)
+          echo "=== vercel output ==="
+          echo "$VERCEL_OUT"
+          echo "====================="
+          DEPLOY_URL=$(echo "$VERCEL_OUT" | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -1)
           echo "Deploy URL: $DEPLOY_URL"
+          if [ -z "$DEPLOY_URL" ]; then echo "ERROR: no vercel.app URL found in output" && exit 1; fi
           vercel alias "$DEPLOY_URL" edgekit.uk --token "$VERCEL_TOKEN"
           vercel alias "$DEPLOY_URL" www.edgekit.uk --token "$VERCEL_TOKEN"
