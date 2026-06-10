@@ -196,6 +196,49 @@ class PositionBoxesRenderer {
 }
 
 
+// ── Replay start-line primitive ───────────────────────────────────────
+class ReplayStartLinePrimitive {
+  _chart: IChartApi | null = null;
+  _series: ISeriesApi<"Candlestick"> | null = null;
+  _requestUpdate?: () => void;
+  _time: UTCTimestamp | null = null;
+  _paneViews: any[];
+  constructor() { this._paneViews = [new ReplayStartLinePaneView(this)]; }
+  attached(p: any) { this._chart = p.chart; this._series = p.series; this._requestUpdate = p.requestUpdate; }
+  detached() { this._chart = null; this._series = null; }
+  updateAllViews() {}
+  paneViews() { return this._paneViews; }
+  setTime(t: UTCTimestamp | null) { this._time = t; this._requestUpdate?.(); }
+}
+class ReplayStartLinePaneView {
+  constructor(private _src: ReplayStartLinePrimitive) {}
+  update() {}
+  renderer() { return new ReplayStartLineRenderer(this._src); }
+}
+class ReplayStartLineRenderer {
+  constructor(private _src: ReplayStartLinePrimitive) {}
+  draw(target: any) {
+    const { _chart: chart, _time: time } = this._src;
+    if (!chart || time == null) return;
+    const ts = chart.timeScale();
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx: CanvasRenderingContext2D = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const x = ts.timeToCoordinate(time);
+      if (x == null) return;
+      ctx.strokeStyle = "#3B82F6";
+      ctx.lineWidth = 1.5 * hr;
+      ctx.setLineDash([6 * hr, 4 * hr]);
+      ctx.beginPath();
+      ctx.moveTo(x * hr, 0);
+      ctx.lineTo(x * hr, scope.bitmapSize.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+}
+
+
 function tpPrice(tr: ChartTrade, targetR: number) {
   const r1 = Math.abs(tr.entry - tr.sl);
   return tr.direction === "Bull" ? tr.entry + r1 * targetR : tr.entry - r1 * targetR;
@@ -226,17 +269,22 @@ export function ChartPreview({
   defaultBars?: number;
 }) {
   // ── Refs ──────────────────────────────────────────────────────────────
-  const containerRef     = useRef<HTMLDivElement>(null);
-  const chartRef         = useRef<IChartApi | null>(null);
-  const candlesRef       = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const markersRef       = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const allMarkersRef    = useRef<any[]>([]);
+  const containerRef      = useRef<HTMLDivElement>(null);
+  const chartRef          = useRef<IChartApi | null>(null);
+  const candlesRef        = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersRef        = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const allMarkersRef     = useRef<any[]>([]);
   const lastViewCutoffRef = useRef<number | null>(null);
-  const posBoxPrimRef    = useRef<PositionBoxesPrimitive | null>(null);
-  const ribbonRef        = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const indicatorRefs    = useRef<ISeriesApi<"Line">[]>([]);
-  const zonesPrimRef     = useRef<ZonesPrimitive | null>(null);
-  const selPriceLinesRef = useRef<IPriceLine[]>([]);
+  const posBoxPrimRef     = useRef<PositionBoxesPrimitive | null>(null);
+  const startLinePrimRef  = useRef<ReplayStartLinePrimitive | null>(null);
+  const replayStartIdxRef = useRef<number | null>(null);
+  const ribbonRef         = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const indicatorRefs     = useRef<ISeriesApi<"Line">[]>([]);
+  const zonesPrimRef      = useRef<ZonesPrimitive | null>(null);
+  const selPriceLinesRef  = useRef<IPriceLine[]>([]);
+  // Stable refs so keyboard/pick handlers don't go stale during fast playback
+  const replayIdxRef      = useRef<number | null>(null);
+  const dataRef           = useRef<CP | null>(null);
 
   // ── State ─────────────────────────────────────────────────────────────
   const [data,    setData]    = useState<CP | null>(null);
@@ -259,6 +307,11 @@ export function ChartPreview({
   const [replayIdx, setReplayIdx] = useState<number | null>(null);
   const [playing,   setPlaying]   = useState(false);
   const [speed,     setSpeed]     = useState<number>(1);
+  const [pickMode,  setPickMode]  = useState(false);
+
+  // Keep stable refs in sync so keyboard/pick handlers never capture stale values
+  useEffect(() => { replayIdxRef.current = replayIdx; }, [replayIdx]);
+  useEffect(() => { dataRef.current = data; }, [data]);
 
   // Editable position tool — live entry/SL/TP for the selected trade
   const [editEntry, setEditEntry] = useState<number | null>(null);
@@ -329,6 +382,12 @@ export function ChartPreview({
       posBoxPrimRef.current = pb;
     } catch { posBoxPrimRef.current = null; }
 
+    try {
+      const sl = new ReplayStartLinePrimitive();
+      (candles as any).attachPrimitive?.(sl);
+      startLinePrimRef.current = sl;
+    } catch { startLinePrimRef.current = null; }
+
     type M = { time: UTCTimestamp; position: SeriesMarkerBarPosition; shape: SeriesMarkerShape; color: string; size?: number };
     const markers: M[] = [];
     data.trades.forEach((tr) => {
@@ -360,9 +419,11 @@ export function ChartPreview({
       markersRef.current?.detach();
       markersRef.current = null; candlesRef.current = null;
       zonesPrimRef.current = null; posBoxPrimRef.current = null;
+      startLinePrimRef.current = null;
       ribbonRef.current = null; indicatorRefs.current = [];
       selPriceLinesRef.current = [];
       lastViewCutoffRef.current = null;
+      replayStartIdxRef.current = null;
       chart.remove(); chartRef.current = null;
     };
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -596,6 +657,74 @@ export function ChartPreview({
     const futureT = (lastBar.t as number) + barSpacingSec * halfWindow;
     chart.timeScale().setVisibleRange({ from: fromBar.t as UTCTimestamp, to: futureT as UTCTimestamp });
   }, [replayIdx, data]);
+
+
+  // ── Replay start-line: set when entering replay, clear on reset ───────
+  useEffect(() => {
+    if (replayIdx !== null && replayStartIdxRef.current === null) {
+      replayStartIdxRef.current = replayIdx;
+      const t = data?.bars[replayIdx]?.t;
+      if (t != null) startLinePrimRef.current?.setTime(t as UTCTimestamp);
+    }
+    if (replayIdx === null) {
+      replayStartIdxRef.current = null;
+      startLinePrimRef.current?.setTime(null);
+    }
+  }, [replayIdx, data]);
+
+
+  // ── Keyboard shortcuts (Space = play/pause · → = step) ───────────────
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (replayIdxRef.current == null) setReplayIdx(0);
+        setPlaying((p) => !p);
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        const d = dataRef.current;
+        if (!d) return;
+        setPlaying(false);
+        setReplayIdx((cur) => Math.min((cur ?? 0) + 1, d.bars.length - 1));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+
+  // ── Pick mode: click chart to seek to that bar ────────────────────────
+  useEffect(() => {
+    const container = containerRef.current;
+    const chart     = chartRef.current;
+    if (!pickMode || !container || !chart || !data) return;
+    container.style.cursor = "crosshair";
+    function onClick(e: MouseEvent) {
+      if (!chart || !data) return;
+      const rect = container!.getBoundingClientRect();
+      const time = chart.timeScale().coordinateToTime(e.clientX - rect.left) as UTCTimestamp | null;
+      if (time != null) {
+        const bars = data.bars;
+        let nearest = 0, minDiff = Infinity;
+        for (let i = 0; i < bars.length; i++) {
+          const d = Math.abs((bars[i].t as number) - (time as number));
+          if (d < minDiff) { minDiff = d; nearest = i; }
+        }
+        setReplayIdx(nearest);
+        setPlaying(false);
+      }
+      setPickMode(false);
+    }
+    container.addEventListener("click", onClick);
+    return () => {
+      container.removeEventListener("click", onClick);
+      container.style.cursor = "";
+    };
+  }, [pickMode, data]);
+
 
   const replayInfo = useMemo(() => {
     if (replayIdx == null || !data) return null;
@@ -941,10 +1070,32 @@ export function ChartPreview({
               </button>
             ))}
           </div>
+          {/* Pick start point */}
+          <button
+            onClick={() => { setPlaying(false); setPickMode((v) => !v); }}
+            title="Click a candle on the chart to jump replay to that point"
+            className={`text-xs px-3 py-1 rounded-md font-medium transition-colors shrink-0 ${pickMode ? "bg-blue-500 text-white" : "bg-cream border border-border text-muted hover:text-ink"}`}>
+            ✂ Pick
+          </button>
+
+          {/* Play / Pause */}
           <button
             onClick={() => { if (replayIdx == null) setReplayIdx(0); setPlaying((p) => !p); }}
+            title="Space"
             className="text-xs px-3 py-1 rounded-md bg-ink text-cream font-medium hover:opacity-90 transition-opacity shrink-0">
             {playing ? "⏸ Pause" : "▶ Play"}
+          </button>
+
+          {/* Step forward one bar */}
+          <button
+            onClick={() => {
+              if (!data) return;
+              setPlaying(false);
+              setReplayIdx((cur) => Math.min((cur ?? 0) + 1, data.bars.length - 1));
+            }}
+            title="Step forward one bar  →"
+            className="text-xs px-2 py-1 rounded-md bg-cream border border-border text-muted hover:text-ink font-medium shrink-0">
+            ›
           </button>
           <input
             type="range" min={0} max={data.bars.length - 1}
@@ -984,7 +1135,7 @@ export function ChartPreview({
             {ind.label}
           </span>
         ))}
-        <span className="ml-auto italic">Click trade → zoom + edit position tool · Scroll → zoom · Drag → pan</span>
+        <span className="ml-auto italic">Click trade → zoom · Scroll → zoom · Drag → pan · Space → play/pause · → → step</span>
       </div>
     </div>
   );
