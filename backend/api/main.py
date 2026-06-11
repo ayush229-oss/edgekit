@@ -70,7 +70,8 @@ if _SENTRY_DSN:
 # ── VPS deploy webhook (CI calls this instead of SSH) ────────────────────────
 # Triggered by GitHub Actions on push to main. Pulls latest code and restarts.
 # No secret needed — deploy only does `git clone` from a public repo.
-_DEPLOY_SCRIPT = "/opt/edgekit/scripts/vps_deploy.sh"
+_DEPLOY_SCRIPT          = "/opt/edgekit/scripts/vps_deploy.sh"
+_DEPLOY_FRONTEND_SCRIPT = "/opt/edgekit/scripts/vps_deploy_frontend.sh"
 
 @app.post("/internal/deploy", include_in_schema=False)
 async def trigger_deploy():
@@ -87,6 +88,20 @@ async def trigger_deploy():
         return {"ok": True, "pid": proc.pid, "message": "deploy started via systemd-run"}
     except Exception as e:
         raise HTTPException(500, f"Deploy failed to start: {e}")
+
+@app.post("/internal/deploy-frontend", include_in_schema=False)
+async def trigger_deploy_frontend():
+    import subprocess
+    try:
+        proc = subprocess.Popen(
+            ["systemd-run", "--no-block", "--description=edgekit-deploy-frontend",
+             "/bin/bash", _DEPLOY_FRONTEND_SCRIPT],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {"ok": True, "pid": proc.pid, "message": "frontend deploy started"}
+    except Exception as e:
+        raise HTTPException(500, f"Frontend deploy failed to start: {e}")
 
 # ── CORS — locked to known origins (override via CORS_ORIGINS env var) ───────
 _DEFAULT_ORIGINS = "https://edgekit.uk,https://www.edgekit.uk,http://localhost:3000,http://127.0.0.1:3000"
