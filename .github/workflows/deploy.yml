@@ -77,10 +77,11 @@ jobs:
 
       - name: Deploy to Vercel and alias edgekit.uk
         run: |
-          VERCEL_OUT=$(vercel --prod --cwd frontend --token "$VERCEL_TOKEN" --yes 2>&1)
-          echo "=== vercel output ==="
+          echo "--- vercel whoami ---"
+          vercel whoami --token "$VERCEL_TOKEN" 2>&1 || echo "whoami failed (exit $?)"
+          echo "--- vercel deploy ---"
+          VERCEL_OUT=$(vercel --prod --cwd frontend --token "$VERCEL_TOKEN" --yes 2>&1) || { echo "$VERCEL_OUT"; exit 1; }
           echo "$VERCEL_OUT"
-          echo "====================="
           DEPLOY_URL=$(echo "$VERCEL_OUT" | grep -Eo 'https://[^ ]+\.vercel\.app' | tail -1)
           echo "Deploy URL: $DEPLOY_URL"
           if [ -z "$DEPLOY_URL" ]; then echo "ERROR: no vercel.app URL found in output" && exit 1; fi
