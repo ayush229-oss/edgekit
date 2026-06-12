@@ -446,26 +446,32 @@ export function ChartPreview({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data) return;
+    // Adding/removing series makes lightweight-charts re-fit the time scale,
+    // which snaps the candles back to the right edge. Snapshot the view and
+    // restore it so toggling an indicator keeps the current framing.
+    const savedRange = chart.timeScale().getVisibleLogicalRange();
     for (const s of indicatorRefs.current) { try { chart.removeSeries(s); } catch {} }
     indicatorRefs.current = [];
-    if (!showIndicators || !data.indicators || data.indicators.length === 0) return;
-    const styleMap = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted } as const;
-    for (const ind of data.indicators) {
-      const series = chart.addSeries(LineSeries, {
-        color: ind.color, lineWidth: ind.line_width as 1|2|3|4,
-        lineStyle: styleMap[ind.line_style] ?? LineStyle.Solid,
-        crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-        title: ind.label,
-      });
-      const points: Array<{ time: UTCTimestamp; value?: number }> = [];
-      for (let i = 0; i < data.bars.length && i < ind.values.length; i++) {
-        const v = ind.values[i];
-        const t = data.bars[i].t as UTCTimestamp;
-        points.push(v === null || v === undefined || !Number.isFinite(v) ? { time: t } : { time: t, value: v });
+    if (showIndicators && data.indicators && data.indicators.length > 0) {
+      const styleMap = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted } as const;
+      for (const ind of data.indicators) {
+        const series = chart.addSeries(LineSeries, {
+          color: ind.color, lineWidth: ind.line_width as 1|2|3|4,
+          lineStyle: styleMap[ind.line_style] ?? LineStyle.Solid,
+          crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+          title: ind.label,
+        });
+        const points: Array<{ time: UTCTimestamp; value?: number }> = [];
+        for (let i = 0; i < data.bars.length && i < ind.values.length; i++) {
+          const v = ind.values[i];
+          const t = data.bars[i].t as UTCTimestamp;
+          points.push(v === null || v === undefined || !Number.isFinite(v) ? { time: t } : { time: t, value: v });
+        }
+        series.setData(points as any);
+        indicatorRefs.current.push(series);
       }
-      series.setData(points as any);
-      indicatorRefs.current.push(series);
     }
+    if (savedRange) chart.timeScale().setVisibleLogicalRange(savedRange);
   }, [data, showIndicators]);
 
 
@@ -530,8 +536,11 @@ export function ChartPreview({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data) return;
+    // Preserve framing across the series add/remove (see indicators effect).
+    const savedRange = chart.timeScale().getVisibleLogicalRange();
     if (!showRibbon) {
       if (ribbonRef.current) { chart.removeSeries(ribbonRef.current); ribbonRef.current = null; }
+      if (savedRange) chart.timeScale().setVisibleLogicalRange(savedRange);
       return;
     }
     const ribbon = chart.addSeries(HistogramSeries, {
@@ -546,6 +555,7 @@ export function ChartPreview({
     });
     ribbon.setData(arr as any);
     ribbonRef.current = ribbon;
+    if (savedRange) chart.timeScale().setVisibleLogicalRange(savedRange);
   }, [showRibbon, data]);
 
 
