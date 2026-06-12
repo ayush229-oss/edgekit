@@ -7,8 +7,18 @@ const BACKEND_URL = (
   (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765")
 ).replace(/[^\x20-\x7E]/g, "").trim();
 
-// Only forward headers that the VPS backend actually needs
-const FORWARD_HEADERS = ["content-type", "authorization", "accept", "accept-encoding", "accept-language"];
+// Only forward headers that the VPS backend actually needs.
+// NB: accept-encoding is deliberately NOT forwarded. If the backend gzips the
+// response, fetch() auto-decompresses it when we call .text(), but the upstream
+// content-encoding/content-length headers then describe the compressed bytes —
+// passing them through corrupts the response (empty body downstream). Letting
+// the backend reply uncompressed sidesteps the whole mismatch.
+const FORWARD_HEADERS = ["content-type", "authorization", "accept", "accept-language"];
+
+// Response headers that no longer describe the decoded body we forward.
+const STRIP_RESPONSE_HEADERS = new Set([
+  "transfer-encoding", "content-encoding", "content-length",
+]);
 
 // Backend paths the public proxy must never expose. The proxy injects the
 // shared x-api-key, so without this gate any anonymous visitor could reach
@@ -40,7 +50,7 @@ async function proxy(req: NextRequest, { params }: { params: { path: string[] } 
 
     const resHeaders: Record<string, string> = {};
     upstream.headers.forEach((value, key) => {
-      if (key !== "transfer-encoding") resHeaders[key] = value.replace(/[^\x20-\x7E]/g, "");
+      if (!STRIP_RESPONSE_HEADERS.has(key)) resHeaders[key] = value.replace(/[^\x20-\x7E]/g, "");
     });
 
     return new NextResponse(await upstream.text(), {
