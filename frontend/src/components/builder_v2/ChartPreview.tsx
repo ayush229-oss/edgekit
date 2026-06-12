@@ -52,6 +52,19 @@ const C = {
   grid:   "#EAE5D8",
 };
 
+// Fraction of the chart width to leave blank on the right in the live (non-replay)
+// view, so the latest candle has breathing room instead of sitting on the price
+// axis. Replay mode reserves its own right margin separately (see futureT below).
+const LIVE_RIGHT_BLANK = 0.5;
+
+// Show every bar but pack them into the left (1 - LIVE_RIGHT_BLANK) of the width,
+// leaving the rest empty on the right. Falls back to fitContent for tiny series.
+function applyLiveView(chart: IChartApi, barCount: number) {
+  const ts = chart.timeScale();
+  if (barCount < 2) { ts.fitContent(); return; }
+  ts.setVisibleLogicalRange({ from: 0, to: (barCount - 1) / (1 - LIVE_RIGHT_BLANK) });
+}
+
 
 // ── Structural-zone primitive ─────────────────────────────────────────────
 type ZShape =
@@ -412,7 +425,7 @@ export function ChartPreview({
       if (el && chartRef.current) chartRef.current.applyOptions({ width: el.clientWidth, height: el.clientHeight });
     });
     ro.observe(el);
-    chart.timeScale().fitContent();
+    applyLiveView(chart, displayBars.length);
 
     return () => {
       ro.disconnect();
@@ -611,7 +624,7 @@ export function ChartPreview({
         markersRef.current?.setMarkers(allMarkersRef.current);
         lastViewCutoffRef.current = null;
       }
-      chart.timeScale().fitContent();
+      applyLiveView(chart, displayBars.length);
       return;
     }
 
