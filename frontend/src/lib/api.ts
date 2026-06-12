@@ -11,9 +11,12 @@
 //               (e.g. when hosting backend on a different domain).
 export const API_URL =
   typeof window === "undefined"
-    // Server-side (SSR/RSC): call VPS directly; on Vercel default to VPS IP
+    // Server-side (SSR/RSC): call VPS directly; on Vercel default to VPS IP.
+    // Strip BOM/non-printables — Vercel env values can carry a BOM prefix
+    // that makes fetch() reject the URL.
     ? (process.env.NEXT_PUBLIC_API_URL ||
        (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765"))
+        .replace(/[^\x20-\x7E]/g, "").trim()
     // Browser: always use /api proxy to avoid mixed-content (HTTPS → HTTP) blocks
     : "/api";
 

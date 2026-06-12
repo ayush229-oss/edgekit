@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND_URL =
+// Vercel env values can carry a BOM/zero-width prefix — strip non-printables
+// or `new URL()` inside fetch() rejects the URL (502 on every proxied call).
+const BACKEND_URL = (
   process.env.NEXT_PUBLIC_API_URL ||
-  (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765");
+  (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765")
+).replace(/[^\x20-\x7E]/g, "").trim();
 
 // Only forward headers that the VPS backend actually needs
 const FORWARD_HEADERS = ["content-type", "authorization", "accept", "accept-encoding", "accept-language"];
