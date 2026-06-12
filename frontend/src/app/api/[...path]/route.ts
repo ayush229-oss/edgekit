@@ -10,9 +10,17 @@ const BACKEND_URL = (
 // Only forward headers that the VPS backend actually needs
 const FORWARD_HEADERS = ["content-type", "authorization", "accept", "accept-encoding", "accept-language"];
 
+// Backend paths the public proxy must never expose. The proxy injects the
+// shared x-api-key, so without this gate any anonymous visitor could reach
+// the VPS deploy webhooks (git pull + service restart) through /api/internal/*.
+const BLOCKED_PREFIXES = ["/internal/"];
+
 async function proxy(req: NextRequest, { params }: { params: { path: string[] } }) {
   try {
     const path = "/" + params.path.join("/");
+    if (BLOCKED_PREFIXES.some((p) => path.startsWith(p))) {
+      return NextResponse.json({ error: "not found" }, { status: 404 });
+    }
     const url = `${BACKEND_URL}${path}${req.nextUrl.search}`;
 
     const reqHeaders: Record<string, string> = {};
