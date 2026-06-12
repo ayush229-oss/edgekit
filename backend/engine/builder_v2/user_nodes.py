@@ -75,6 +75,26 @@ _FORBIDDEN_NAMES = {
     "subprocess", "os", "sys", "io", "pathlib",
 }
 
+# Attribute names that are never allowed on ANY object (np/pd included).
+# `np`/`pd` are full modules in the eval namespace, so blocking dunders is not
+# enough: pandas/numpy expose file- and network-reaching helpers that need no
+# dunder and no forbidden Name to reach. `pd.read_pickle(url)` alone is RCE via
+# pickle. Deny by attribute name so module.method escapes are caught too.
+_FORBIDDEN_ATTRS = {
+    # arbitrary code / deserialization
+    "read_pickle", "to_pickle", "load", "loads", "save", "savez", "savetxt",
+    "fromfile", "tofile", "memmap", "genfromtxt", "loadtxt",
+    # file / network I/O readers & writers
+    "read_csv", "read_table", "read_json", "read_html", "read_xml",
+    "read_excel", "read_parquet", "read_feather", "read_orc", "read_hdf",
+    "read_sql", "read_sql_query", "read_sql_table", "read_clipboard",
+    "read_fwf", "read_stata", "read_sas", "read_spss", "read_gbq",
+    "to_csv", "to_json", "to_pickle", "to_parquet", "to_sql", "to_hdf",
+    "to_excel", "ExcelFile", "HDFStore",
+    # introspection escapes
+    "mro", "subclasses", "func_globals", "__globals__",
+}
+
 _FORMULA_TIMEOUT = 5.0
 
 
@@ -90,8 +110,11 @@ def _check_formula(expr: str) -> None:
     for node in ast.walk(tree):
         if isinstance(node, _FORBIDDEN_NODES):
             raise FormulaSecurityError(f"Forbidden construct: {type(node).__name__}")
-        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
-            raise FormulaSecurityError(f"Forbidden attribute: {node.attr}")
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__"):
+                raise FormulaSecurityError(f"Forbidden attribute: {node.attr}")
+            if node.attr in _FORBIDDEN_ATTRS:
+                raise FormulaSecurityError(f"Forbidden attribute: {node.attr}")
         if isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
             raise FormulaSecurityError(f"Forbidden name: {node.id}")
         if isinstance(node, ast.Call):
