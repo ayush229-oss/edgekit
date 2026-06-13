@@ -4,14 +4,12 @@ on:
   push:
     branches: [main]
 
-# ── Backend ───────────────────────────────────────────────────────────────────
-# 1. Lint (ruff) + test (pytest) must pass before any deploy fires.
-# 2. On success, HTTP webhook triggers git pull → systemctl restart on VPS.
-#
-# ── Frontend ──────────────────────────────────────────────────────────────────
-# Webhook calls /internal/deploy-frontend on the VPS.
-# VPS runs vps_deploy_frontend.sh: git clone → npm build → pm2 restart.
-# No tokens, no external services — same pattern as the backend.
+# Live hosting (as of 2026-06-13):
+#   • Backend  → Railway service `edgekit-v2`, git-connected to this repo.
+#     Railway auto-builds + deploys on push (needs the Railway GitHub App granted
+#     access to this repo). The VPS deploy below stays as a warm fallback.
+#   • Frontend → Vercel project `edgekit`, git-connected; auto-deploys on push.
+# This workflow only gates on tests and keeps the VPS backend fallback in sync.
 
 jobs:
   test-backend:
@@ -43,10 +41,12 @@ jobs:
         env:
           EDGEKIT_TEST: "1"
           PYTHONPATH: ".."
-        run: pytest tests/ -x -q --timeout=60
+        # Runs the full backend suite (engine correctness + strategy signals +
+        # smoke) as a deploy gate, not just tests/.
+        run: pytest -q -x --timeout=120
 
-  deploy-backend:
-    name: Backend -> VPS
+  deploy-backend-vps:
+    name: Backend -> VPS (fallback)
     runs-on: ubuntu-latest
     needs: test-backend
     steps:
@@ -57,18 +57,4 @@ jobs:
           response=$(curl -fsS --max-time 30 -X POST \
             -H "X-API-Key: ${EDGEKIT_API_KEY}" \
             "http://165.232.178.128:8765/internal/deploy")
-          echo "Deploy triggered: $response"
-
-  deploy-frontend:
-    name: Frontend -> VPS
-    runs-on: ubuntu-latest
-    needs: test-backend
-    steps:
-      - name: Trigger frontend deploy webhook
-        env:
-          EDGEKIT_API_KEY: ${{ secrets.EDGEKIT_API_KEY }}
-        run: |
-          response=$(curl -fsS --max-time 30 -X POST \
-            -H "X-API-Key: ${EDGEKIT_API_KEY}" \
-            "http://165.232.178.128:8765/internal/deploy-frontend")
-          echo "Deploy triggered: $response"
+          echo "VPS deploy triggered: $response"
