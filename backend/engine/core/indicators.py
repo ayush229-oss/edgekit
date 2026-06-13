@@ -24,8 +24,14 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    # Let avg_loss == 0 (with gains) divide to +inf so RSI resolves to the
+    # standard 100, instead of NaN. Warmup stays NaN (averages are NaN there).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rs = avg_gain / avg_loss
+    out = 100 - (100 / (1 + rs))
+    # Perfectly flat window (no gains AND no losses) → neutral 50, not 0/0 NaN.
+    out = out.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
+    return out
 
 
 def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:

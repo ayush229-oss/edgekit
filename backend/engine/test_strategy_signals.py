@@ -76,27 +76,26 @@ def test_ema_matches_adjust_false_recursion():
     assert out.iloc[period - 1:].values == pytest.approx(ref[period - 1:], abs=1e-9)
 
 
-def test_rsi_bounds_and_near_extremes():
-    # Mostly-up series with one small pullback (so avg_loss > 0 → RSI defined).
-    vals = list(np.arange(1, 40, dtype=float))
-    vals[20] = vals[19] - 0.5                            # single down-tick
-    r = ind.rsi(pd.Series(vals), 14).dropna()
+def test_rsi_bounds_and_extremes():
+    up = pd.Series(np.arange(1, 40), dtype=float)        # strictly rising
+    r = ind.rsi(up, 14).dropna()
     assert (r >= 0).all() and (r <= 100).all()
-    assert r.iloc[-1] > 90.0                             # overwhelmingly gains → high RSI
+    assert r.iloc[-1] == pytest.approx(100.0)            # no losses → RSI 100
 
     down = pd.Series(np.arange(40, 1, -1), dtype=float)  # strictly falling
     rd = ind.rsi(down, 14).dropna()
     assert rd.iloc[-1] == pytest.approx(0.0)             # no gains → RSI 0
 
 
-def test_rsi_no_loss_returns_nan_quirk():
-    # KNOWN QUIRK (not standard): with zero losses, avg_loss.replace(0, NaN)
-    # makes RS NaN, so RSI is NaN rather than the conventional 100. Harmless in
-    # practice (real data is never perfectly monotonic; NaN compares False so no
-    # false signal fires) but documented here so a future RSI fix updates this.
-    up = pd.Series(np.arange(1, 40), dtype=float)        # strictly rising
-    r = ind.rsi(up, 14)
-    assert r.iloc[14:].isna().all()                      # all NaN, not 100
+def test_rsi_flat_is_neutral_50():
+    flat = pd.Series([100.0] * 40)                       # no movement at all
+    r = ind.rsi(flat, 14)
+    assert r.iloc[14:].eq(50.0).all()                    # neutral, not NaN
+
+
+def test_rsi_warmup_is_nan():
+    r = ind.rsi(pd.Series(np.arange(1, 40), dtype=float), 14)
+    assert r.iloc[:13].isna().all()                      # first period-1 masked
 
 
 def test_atr_constant_range_converges():
@@ -105,6 +104,69 @@ def test_atr_constant_range_converges():
     df = make_df(bars)
     a = ind.atr(df, 14).dropna()
     assert a.iloc[-1] == pytest.approx(2.0, abs=1e-6)
+
+
+# ── 1b. REMAINING INDICATOR AUDIT (macd/bollinger/vwap/supertrend/pivots) ────
+def test_macd_definition():
+    s = pd.Series(100 + np.cumsum(np.ones(80)), dtype=float)   # steady ramp up
+    m = ind.macd(s, 12, 26, 9)
+    valid = m.dropna()
+    # histogram is exactly macd - signal, by definition
+    assert np.allclose(valid["hist"].values,
+                       (valid["macd"] - valid["signal"]).values, atol=1e-9)
+    # fast EMA leads slow EMA in an uptrend → macd line positive
+    assert valid["macd"].iloc[-1] > 0
+
+
+def test_bollinger_symmetry_and_flat():
+    s = pd.Series(np.linspace(100, 120, 60))
+    b = ind.bollinger(s, 20, 2.0)
+    v = b.dropna()
+    # bands are symmetric around the mid
+    assert np.allclose((v["upper"] - v["mid"]).values,
+                       (v["mid"] - v["lower"]).values, atol=1e-9)
+    # half-width equals stdev * rolling std
+    sd = s.rolling(20).std().dropna()
+    assert np.allclose((v["upper"] - v["mid"]).values, (2.0 * sd).values, atol=1e-9)
+    # constant series → zero width
+    flat = ind.bollinger(pd.Series([100.0] * 40), 20, 2.0).dropna()
+    assert np.allclose(flat["upper"].values, flat["mid"].values, atol=1e-9)
+    assert np.allclose(flat["lower"].values, flat["mid"].values, atol=1e-9)
+
+
+def test_vwap_constant_typical_price():
+    # Every bar has typical price (H+L+C)/3 == 100, varied volume, one session.
+    bars = [(100, 101, 99, 100, 500 + 50 * k) for k in range(10)]   # H+L+C=300
+    df = make_df(bars)
+    vw = ind.vwap(df).dropna()
+    assert np.allclose(vw.values, 100.0, atol=1e-9)       # VWAP must equal 100
+
+
+def test_vwap_requires_volume_column():
+    df = make_df([(100, 101, 99, 100)]).drop(columns=["V"])
+    with pytest.raises(ValueError):
+        ind.vwap(df)
+
+
+def test_supertrend_direction_tracks_trend():
+    up = [(100 + k, 100 + k + 0.5, 100 + k - 0.5, 100 + k) for k in range(40)]
+    down = [(140 - k, 140 - k + 0.5, 140 - k - 0.5, 140 - k) for k in range(40)]
+    df = make_df(up + down)
+    st = ind.supertrend(df, 10, 3.0)
+    assert set(st["direction"].unique()).issubset({1, -1})   # only valid states
+    assert st["direction"].iloc[39] == 1                     # end of uptrend = up
+    assert st["direction"].iloc[-1] == -1                    # end of downtrend = down
+
+
+def test_swing_pivots_definition_is_noncausal():
+    # A swing high at i is the max of [i-len .. i+len]. NOTE: this uses FUTURE
+    # bars (center=True) → non-causal. Strategies using it must offset; the
+    # prefix-invariance test confirms none leak it into entry timing.
+    highs = [10, 11, 12, 20, 12, 11, 10]          # clear peak at index 3
+    bars = [(h, h, h - 1, h) for h in highs]
+    piv = ind.swing_pivots(make_df(bars), length=2)
+    assert bool(piv["swing_high"].iloc[3]) is True
+    assert bool(piv["swing_high"].iloc[2]) is False
 
 
 # ── 2. EXACT SIGNAL PLACEMENT ────────────────────────────────────────────────
