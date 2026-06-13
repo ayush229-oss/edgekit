@@ -5,11 +5,13 @@ on:
     branches: [main]
 
 # Live hosting (as of 2026-06-13):
-#   • Backend  → Railway service `edgekit-v2`, git-connected to this repo.
-#     Railway auto-builds + deploys on push (needs the Railway GitHub App granted
-#     access to this repo). The VPS deploy below stays as a warm fallback.
+#   • Backend  → Railway service `edgekit-v2`. Deployed by the deploy-backend-railway
+#     job below once the RAILWAY_TOKEN secret is set (create a project token in the
+#     Railway dashboard → repo Settings → Secrets → Actions → add RAILWAY_TOKEN).
+#     Until then that job no-ops. The VPS deploy stays as a warm fallback.
+#     (Alternative: install the Railway GitHub App on this repo for native
+#      push-deploys; then you don't need the token job. Use one or the other.)
 #   • Frontend → Vercel project `edgekit`, git-connected; auto-deploys on push.
-# This workflow only gates on tests and keeps the VPS backend fallback in sync.
 
 jobs:
   test-backend:
@@ -44,6 +46,28 @@ jobs:
         # Runs the full backend suite (engine correctness + strategy signals +
         # smoke) as a deploy gate, not just tests/.
         run: pytest -q -x --timeout=120
+
+  deploy-backend-railway:
+    name: Backend -> Railway
+    runs-on: ubuntu-latest
+    needs: test-backend
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Skip notice (token missing)
+        if: env.RAILWAY_TOKEN == ''
+        run: echo "RAILWAY_TOKEN not set — skipping Railway deploy. Add a project token as the RAILWAY_TOKEN repo secret to enable backend auto-deploy."
+
+      - uses: actions/checkout@v4
+        if: env.RAILWAY_TOKEN != ''
+
+      - name: Install Railway CLI
+        if: env.RAILWAY_TOKEN != ''
+        run: npm i -g @railway/cli
+
+      - name: Deploy backend to Railway
+        if: env.RAILWAY_TOKEN != ''
+        run: railway up --ci --service edgekit-v2
 
   deploy-backend-vps:
     name: Backend -> VPS (fallback)
