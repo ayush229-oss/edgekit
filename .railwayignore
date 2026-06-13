@@ -1,0 +1,8 @@
+# Railway runs only the Python backend (uvicorn backend.api.main:app).
+# Keep the upload lean — exclude the frontend and build/test junk.
+frontend/
+next-build.tar.gz
+*.tar.gz
+*.log
+*.db
+*.png
