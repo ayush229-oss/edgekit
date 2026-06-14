@@ -89,21 +89,6 @@ const COMPARISON = [
   { label: "Free to start",          edgekit: "Yes",       pine: "Yes",          manual: "Yes" },
 ];
 
-const TESTIMONIALS = [
-  {
-    text: "I was blowing FTMO challenges every month. I thought I was just unlucky. Edgekit showed me I had no edge — the backtest was flat. Built a new system in a week. Passed my next challenge.",
-    name: "Arjun V.", role: "Forex trader · FTMO funded", avatar: "A",
-  },
-  {
-    text: "My win rate looked fine in my head. Then I backtested it — 34%. Building it as a system forced me to define every rule. Two months later I'm at 52% with positive expectancy.",
-    name: "Sneha R.", role: "Price action trader · The Funded Trader", avatar: "S",
-  },
-  {
-    text: "I was taking 10 trades a day on gut feel. Edgekit made me realise I only had 2 valid setups. Fewer trades, more money, zero stress.",
-    name: "Karan M.", role: "Intraday trader · Forex · India", avatar: "K",
-  },
-];
-
 const FAQ = [
   {
     q: "Is Edgekit really free?",
@@ -161,7 +146,6 @@ export default async function LandingPage() {
             <a href="#how-it-works" className="px-3 py-1.5 rounded-full hover:text-ink hover:bg-surface2 transition-colors">How it works</a>
             <a href="#features"     className="px-3 py-1.5 rounded-full hover:text-ink hover:bg-surface2 transition-colors">Features</a>
             <a href="#strategies"   className="px-3 py-1.5 rounded-full hover:text-ink hover:bg-surface2 transition-colors">Strategies</a>
-            <a href="#testimonials" className="px-3 py-1.5 rounded-full hover:text-ink hover:bg-surface2 transition-colors">Traders</a>
             <a href="#faq"          className="px-3 py-1.5 rounded-full hover:text-ink hover:bg-surface2 transition-colors">FAQ</a>
           </nav>
           <div className="flex items-center gap-2">
@@ -366,37 +350,6 @@ export default async function LandingPage() {
               </tbody>
             </table>
           </div>
-        </div>
-      </section>
-
-      {/* ── TESTIMONIALS ─────────────────────────────────────────────────────── */}
-      <section id="testimonials" className="max-w-6xl mx-auto px-6 py-24">
-        <p className="text-[11px] uppercase tracking-[0.25em] text-money mb-4 font-semibold text-center">Traders say</p>
-        <h2 className="text-[32px] sm:text-display-3 font-semibold tracking-tight text-ink text-center mb-6">
-          From gambling to systematic.
-        </h2>
-        <p className="text-center text-[14px] text-muted mb-14 max-w-2xl mx-auto">
-          Every result below comes from the same engine you get on the free tier — real
-          historical data, every simulated trade visible, nothing aggregated away.
-        </p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          {TESTIMONIALS.map((t) => (
-            <div key={t.name} className="card p-7 flex flex-col gap-4">
-              <p className="text-[14px] leading-relaxed text-ink2 flex-1">"{t.text}"</p>
-              <div className="flex items-center gap-3 pt-3 border-t border-border">
-                <div className="w-8 h-8 rounded-full bg-money/15 flex items-center justify-center text-money font-semibold text-[13px] shrink-0">{t.avatar}</div>
-                <div>
-                  <div className="font-medium text-[13px]">{t.name}</div>
-                  <div className="text-[11px] text-muted">{t.role}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="text-center mt-10">
-          <Link href="/testimonials" className="text-[13px] text-money hover:underline font-medium">
-            Submit your own story →
-          </Link>
         </div>
       </section>
 
