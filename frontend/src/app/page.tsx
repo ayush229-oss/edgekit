@@ -188,7 +188,7 @@ export default async function LandingPage() {
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-6">
           <Link href="/home" className="btn-primary px-8 py-3.5 text-[15px] shadow-lift">
-            Try it free — no signup needed →
+            Prove your strategy works — free →
           </Link>
           <a href="#strategies" className="btn-secondary px-8 py-3.5 text-[15px]">
             See example backtests
