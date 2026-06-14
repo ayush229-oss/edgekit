@@ -2048,7 +2048,16 @@ def run_v2_backtest(
             raise HTTPException(422, "No bars in the specified date range.")
 
     pip = infer_pip_from_df(df, req.symbol)
-    setups = GraphV2Strategy(graph).detect(df, {"pip": pip})
+    strategy = GraphV2Strategy(graph)
+    setups = strategy.detect(df, {"pip": pip})
+
+    # Execution costs: an `execution.costs` node (written into the run context
+    # during detect) takes precedence; otherwise fall back to request-level
+    # cost fields. `x or y` means a node value of 0 defers to the request.
+    cctx = getattr(strategy, "ctx", None)
+    eff_slippage = (float(getattr(cctx, "slippage_pips", 0.0) or 0.0) or req.slippage_pips)
+    eff_spread   = (float(getattr(cctx, "spread_pips",   0.0) or 0.0) or req.spread_pips)
+    eff_comm     = (float(getattr(cctx, "commission",    0.0) or 0.0) or req.commission)
 
     tdf = simulate(
         df, setups,
@@ -2061,9 +2070,9 @@ def run_v2_backtest(
         order_expiry     = req.order_expiry,
         session_hours    = req.session_hours,
         pip              = pip,
-        spread_pips      = req.spread_pips,
-        commission       = req.commission,
-        slippage_pips    = req.slippage_pips,
+        spread_pips      = eff_spread,
+        commission       = eff_comm,
+        slippage_pips    = eff_slippage,
         swap_long_pips   = req.swap_long_pips,
         swap_short_pips  = req.swap_short_pips,
         risk_pct         = req.risk_pct,

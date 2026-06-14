@@ -49,7 +49,7 @@ from backend.db import get_db, init_db, User
 
 app = FastAPI(
     title="Edgekit API",
-    version="0.1.4",
+    version="0.1.5",
     description="No-code strategy backtesting platform — backend.",
 )
 
