@@ -392,3 +392,37 @@ def _exec_market(df, i, ctx, inputs, p):
     if adj is None: return {"order": None}
     return {"order": OrderIntent(adjusted=adj, order_type="limit",
                                  expiry_bars=int(p["expiry_bars"]))}
+
+
+# ── Execution realism: user-set costs for their market ─────────────────────
+# A standalone config node (no ports). It writes the run's cost assumptions
+# into the shared RunContext during prepare(); the backtest route reads them
+# back off the strategy and hands them to the simulator. Drop one onto the
+# canvas and dial it to match YOUR broker + instrument — volatile or thin
+# markets (crypto, exotics, news) need more slippage than deep FX majors.
+def _costs_prepare(df, ctx, p):
+    ctx.slippage_pips = float(p.get("slippage_pips", 0.0) or 0.0)
+    ctx.spread_pips   = float(p.get("spread_pips",   0.0) or 0.0)
+    ctx.commission    = float(p.get("commission",    0.0) or 0.0)
+
+def _costs_eval(df, i, ctx, inputs, p):
+    return None   # config-only: emits nothing per bar
+
+_register(NodeSpec(
+    type="execution.costs",
+    lane="execution",
+    label="Slippage & costs",
+    description="Model your market's real execution costs: slippage on stop/market "
+                "exits, spread on entries, and per-trade commission. Match these to "
+                "your broker and instrument — wider for volatile/thin markets.",
+    inputs=[],
+    outputs=[],
+    params=[
+        {"key": "slippage_pips", "label": "Slippage (pips)", "type": "float",
+         "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        {"key": "spread_pips",   "label": "Spread (pips)",   "type": "float",
+         "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1},
+        {"key": "commission",    "label": "Commission ($/trade)", "type": "float",
+         "default": 0.0, "min": 0.0, "max": 1000.0, "step": 0.5},
+    ],
+))((_costs_prepare, _costs_eval))

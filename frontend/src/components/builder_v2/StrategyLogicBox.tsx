@@ -98,6 +98,9 @@ function describeNode(n: V2GraphNode, spec: V2NodeSpec): string {
       return `Submit as a **market/limit order** at the entry price (expires after ${p.expiry_bars} bars).`;
     case "execution.limit_at":
       return `Place a **limit at the wired price** (expires after ${p.expiry_bars} bars).`;
+    case "execution.costs":
+      return `Apply real execution costs: **${p.slippage_pips} pip slippage** on exits, ` +
+             `**${p.spread_pips} pip spread** on entries, **$${p.commission}/trade** commission.`;
   }
   return `**${spec.label}**.`;
 }

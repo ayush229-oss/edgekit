@@ -100,8 +100,10 @@ def validate_graph(graph: Dict[str, Any], node_library: Optional[Dict] = None) -
         raise ValueError("Graph contains a cycle — wires must flow one direction.")
     graph["__topo__"] = topo
 
-    # 4) At least one execution sink
-    sinks = [n for n in nodes if lib[n["type"]].lane == "execution"]
+    # 4) At least one execution sink (must emit an "order" port — config-only
+    #    execution nodes like execution.costs have no ports and don't count).
+    sinks = [n for n in nodes if lib[n["type"]].lane == "execution"
+             and any(port == "order" for port, _t in lib[n["type"]].outputs)]
     if not sinks:
         raise ValueError("Graph needs at least one Execution node (the sink).")
 

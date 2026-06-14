@@ -51,9 +51,12 @@ class GraphV2Strategy:
         # Topological order — guaranteed by validate_graph (DAG check)
         self._topo = self.graph["__topo__"]
 
-        # Identify the execution sinks (final nodes that produce OrderIntents)
+        # Identify the execution sinks (final nodes that produce OrderIntents).
+        # An execution-lane node only counts as a sink if it actually emits an
+        # "order" port — config nodes like execution.costs have no ports.
         self._sinks = [nid for nid, n in self.nodes.items()
-                       if self._lib[n["type"]].lane == "execution"]
+                       if self._lib[n["type"]].lane == "execution"
+                       and any(port == "order" for port, _t in self._lib[n["type"]].outputs)]
 
     def default_params(self):
         return {"pip": 0.10}

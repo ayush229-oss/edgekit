@@ -298,6 +298,9 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
                                   f"Check that every node has its required inputs wired.")
 
     try:
+        # Execution costs come from an optional `execution.costs` node the user
+        # dropped on the canvas (written into the run context during detect()).
+        cctx = getattr(strategy, "ctx", None)
         tdf = simulate(
             df, setups,
             target_r         = req.target_r,
@@ -306,6 +309,9 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
             trail_start      = req.trail_start,
             trail_params     = req.trail_params,
             pip              = pip,
+            slippage_pips    = float(getattr(cctx, "slippage_pips", 0.0) or 0.0),
+            spread_pips      = float(getattr(cctx, "spread_pips",   0.0) or 0.0),
+            commission       = float(getattr(cctx, "commission",    0.0) or 0.0),
         )
     except Exception as e:
         raise HTTPException(422, f"Trade simulation failed: {type(e).__name__}: {e}")

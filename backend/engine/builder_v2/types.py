@@ -110,7 +110,8 @@ class RunContext:
     pip:           float = 0.10
     equity:        float = 100.0
     commission:    float = 0.0        # per trade, in account currency
-    slippage_pips: float = 0.0        # symmetric, applied to entry + exit
+    slippage_pips: float = 0.0        # adverse fill on stop/market exits
+    spread_pips:   float = 0.0        # bid/ask spread, widens entry fills
     warmup_bars:   int   = 0          # set by max(period) across indicators
 
     # Indicator cache: key → np.ndarray. Pre-filled before bar loop starts.
