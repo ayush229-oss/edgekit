@@ -320,8 +320,10 @@ def simulate(
                     if cand is not None and cand > t["trail_sl"]:
                         t["trail_sl"] = cand
                     if L[i] <= t["trail_sl"]:
-                        # Market exit — apply slippage
-                        exit_px = min(t["trail_sl"] - slip, L[i])
+                        # Fill at the trail stop (minus slippage). On a gap down
+                        # (open below the stop) fill at the open instead -- never
+                        # the bar low. No separate gap branch exists for trails.
+                        exit_px = min(t["trail_sl"], O_arr[i]) - slip
                         r_exit  = (exit_px - fill_entry) / risk
                         realized += remaining * r_exit
                         risk_usd = min(equity * risk_pct, max_risk_usd)
@@ -335,7 +337,9 @@ def simulate(
                     if cand is not None and cand < t["trail_sl"]:
                         t["trail_sl"] = cand
                     if H[i] >= t["trail_sl"]:
-                        exit_px = max(t["trail_sl"] + slip, H[i])
+                        # Fill at the trail stop (plus slippage), or the open on a
+                        # gap up. Never the bar high.
+                        exit_px = max(t["trail_sl"], O_arr[i]) + slip
                         r_exit  = (fill_entry - exit_px) / risk
                         realized += remaining * r_exit
                         risk_usd = min(equity * risk_pct, max_risk_usd)
@@ -359,8 +363,11 @@ def simulate(
             if not closed and remaining > 1e-9:
                 sl_price = t["sl"]
                 if direction == "Bull" and L[i] <= sl_price and not trailing and next_idx == 0:
-                    # Fill at worst of SL or current bar's action + slippage
-                    exit_px  = min(sl_price - slip, L[i])
+                    # Stop fires as price trades through it -> fill at the stop
+                    # price (minus slippage), NOT the bar low. A gap down
+                    # (open < sl) is handled by the SL_gap branch above, which
+                    # fills at the open. This matches real stop-order execution.
+                    exit_px  = sl_price - slip
                     r_exit   = (exit_px - fill_entry) / risk
                     realized += remaining * r_exit
                     risk_usd = min(equity * risk_pct, max_risk_usd)
@@ -370,7 +377,9 @@ def simulate(
                                    "exit_type": "SL", "exit_idx": i})
                     closed = True
                 elif direction == "Bear" and H[i] >= sl_price and not trailing and next_idx == 0:
-                    exit_px  = max(sl_price + slip, H[i])
+                    # Mirror of the long: fill at the stop (plus slippage), not the
+                    # bar high. Gap ups (open > sl) handled by SL_gap branch above.
+                    exit_px  = sl_price + slip
                     r_exit   = (fill_entry - exit_px) / risk
                     realized += remaining * r_exit
                     risk_usd = min(equity * risk_pct, max_risk_usd)
