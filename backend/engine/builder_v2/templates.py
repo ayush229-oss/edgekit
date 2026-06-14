@@ -429,6 +429,32 @@ _TEMPLATES: List[Dict[str, Any]] = [
 ]
 
 
+# ── Ship every starter with realistic execution costs ──────────────────────
+# Each template gets a standalone `execution.costs` node so backtests model
+# real slippage/spread out of the box instead of assuming perfect fills. The
+# defaults are tuned for XAUUSD (every template's default symbol); users should
+# adjust per instrument/broker via the node's params. No wires — it writes its
+# values into the run context, which the backtest reads.
+_DEFAULT_COSTS = {"slippage_pips": 1.0, "spread_pips": 2.0, "commission": 0.0}
+
+
+def _ensure_costs_node(graph: Dict[str, Any]) -> None:
+    nodes = graph["nodes"]
+    if any(n.get("type") == "execution.costs" for n in nodes):
+        return
+    ys = [n.get("position", {}).get("y", 0) for n in nodes]
+    nodes.append({
+        "id":       "costs",
+        "type":     "execution.costs",
+        "params":   dict(_DEFAULT_COSTS),
+        "position": {"x": 0, "y": (max(ys) if ys else 0) + 160},
+    })
+
+
+for _t in _TEMPLATES:
+    _ensure_costs_node(_t["graph"])
+
+
 def list_templates():
     return [{"id": t["id"], "name": t["name"], "description": t["description"]} for t in _TEMPLATES]
 
