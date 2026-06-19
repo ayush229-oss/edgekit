@@ -249,8 +249,25 @@ def get_strategy_detail(strategy_id: str):
 async def upload_csv(
     file:   UploadFile = File(...),
     symbol: Optional[str] = Form(None),
+    # Gate: CSV upload is a Trader+ feature. require_csv_upload chains through
+    # current_user, so this enforces both authentication and tier in one dep.
+    user:   User = Depends(require_csv_upload),
 ):
-    raw = await file.read()
+    # Bounded read: cap total bytes so an oversized upload can't exhaust memory
+    # (defence-in-depth alongside the auth gate above). Default 50 MB, override
+    # via MAX_UPLOAD_BYTES.
+    max_bytes = int(_os.environ.get("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    raw = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        raw.extend(chunk)
+        if len(raw) > max_bytes:
+            limit = (f"{max_bytes // (1024 * 1024)} MB" if max_bytes >= 1024 * 1024
+                     else f"{max_bytes} bytes")
+            raise HTTPException(413, f"CSV too large (max {limit}).")
+    raw = bytes(raw)
     try:
         df = load_csv(raw)
     except Exception as e:

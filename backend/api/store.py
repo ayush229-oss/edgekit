@@ -14,6 +14,7 @@ import os
 import json
 import secrets
 import tempfile
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -25,16 +26,27 @@ DATA_DIR = Path(os.environ.get("EDGEKIT_DATA_DIR", str(_DEFAULT_DIR)))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_DISK_FILES = 100   # max CSVs kept on disk
+MAX_MEM_ITEMS  = 100   # max DataFrames held in the hot in-memory cache (LRU)
 
-# ── In-memory cache (hot path) ───────────────────────────────────────────────
-_MEM: dict[str, pd.DataFrame] = {}
+# ── In-memory cache (hot path) — LRU bounded to MAX_MEM_ITEMS ─────────────────
+# Was an unbounded dict; under repeated uploads it grew without limit (only the
+# disk side was capped). OrderedDict gives us cheap LRU eviction.
+_MEM: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
+
+
+def _mem_set(sid: str, df: pd.DataFrame) -> None:
+    """Insert/refresh a cache entry and evict the least-recently-used over cap."""
+    _MEM[sid] = df
+    _MEM.move_to_end(sid)
+    while len(_MEM) > MAX_MEM_ITEMS:
+        _MEM.popitem(last=False)   # drop LRU
 
 
 def put(df: pd.DataFrame) -> str:
     """Save a DataFrame to disk (and memory cache). Returns a stable data_id."""
     sid = secrets.token_urlsafe(8)
     _persist(sid, df)
-    _MEM[sid] = df
+    _mem_set(sid, df)
     evict_oldest()
     return sid
 
@@ -42,11 +54,12 @@ def put(df: pd.DataFrame) -> str:
 def get(data_id: str) -> Optional[pd.DataFrame]:
     """Return the DataFrame for data_id. Checks memory first, then disk."""
     if data_id in _MEM:
+        _MEM.move_to_end(data_id)   # mark recently used
         return _MEM[data_id]
     # Try loading from disk (service was restarted)
     df = _load(data_id)
     if df is not None:
-        _MEM[data_id] = df   # warm the cache
+        _mem_set(data_id, df)   # warm the cache
     return df
 
 
