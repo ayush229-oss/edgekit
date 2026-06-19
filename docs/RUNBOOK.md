@@ -27,7 +27,7 @@ Make sure the backend is running first — the home page queries `/strategies`.
 
 ```powershell
 cd C:\Users\Ayush\projects\edgekit
-python -m backend.engine.test_smoke
+python -m backend.engine.manual_smoke
 ```
 
 ## Project layout
