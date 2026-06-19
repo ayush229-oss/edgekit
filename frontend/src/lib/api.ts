@@ -504,6 +504,29 @@ export async function v2Chat(body: {
   return r.json();
 }
 
+export type ExplainErrorResponse = { explanation: string; suggestions: string[] };
+
+/** Turn a raw backtest/setup error into a plain-language explanation plus a few
+ *  AI-generated fix suggestions. Uses the user's AI key when set, else the
+ *  server's. Throws on failure (e.g. no key) so callers can show a fallback. */
+export async function v2ExplainError(body: {
+  error: string;
+  graph?: V2Graph | null;
+  symbol?: string;
+  timeframe?: string;
+}): Promise<ExplainErrorResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const ai = getUserAIKey();
+  if (ai) { headers["X-AI-Key"] = ai.key; headers["X-AI-Provider"] = ai.provider; }
+  const model = getAIModel();
+  if (model) headers["X-AI-Model"] = model;
+  const r = await efetch(`${API_URL}/graph/v2/explain-error`, {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await readApiError(r));
+  return r.json();
+}
+
 export async function getGlobalStats(): Promise<{ total_backtests: number; total_users: number }> {
   const r = await efetch(`${API_URL}/stats/global`, { next: { revalidate: 60 } } as any);
   if (!r.ok) return { total_backtests: 0, total_users: 0 };
@@ -526,7 +549,7 @@ export async function v2RunBacktest(body: any): Promise<BacktestResponse> {
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
   });
-  if (!r.ok) throw new Error((await r.text()) || `v2 backtest: ${r.status}`);
+  if (!r.ok) throw new Error(await readApiError(r));
   return r.json();
 }
 

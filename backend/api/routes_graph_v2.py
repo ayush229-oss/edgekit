@@ -1349,6 +1349,87 @@ def graph_chat(
     )}
 
 
+class ExplainErrorRequest(BaseModel):
+    # The raw error / setup message shown to the user.
+    error:     str
+    # Optional context so the AI can give graph-specific advice.
+    graph:     Optional[Dict[str, Any]] = None
+    symbol:    Optional[str] = None
+    timeframe: Optional[str] = None
+
+
+_EXPLAIN_ERROR_SYSTEM = """You are Edgekit's troubleshooting assistant. A non-technical trader just hit an error or a setup/validation message while building or backtesting a strategy. Translate it into plain English and tell them exactly how to fix it.
+
+Edgekit is a no-code strategy builder: users wire "nodes" (indicators, signals, filters, sizing, risk, exits, execution) on a canvas, then run a backtest on historical price data. Common causes of errors: a node input port left unwired, two ports of incompatible types connected, no execution/entry node, too few bars or a date range with no data, a missing symbol/timeframe, or a custom node referencing unknown types.
+
+Respond with ONLY a JSON object, no prose outside it, in this exact shape:
+{"explanation": "<one or two short sentences, plain language, no jargon>", "suggestions": ["<short actionable step>", "<short actionable step>", ...]}
+
+Rules:
+- 2 to 4 suggestions, each a single concrete action the trader can take right now on the canvas or in the settings.
+- Be specific to the actual error text — reference the node, port, field, or value named in it when possible.
+- No code. No markdown. Keep each suggestion under ~140 characters."""
+
+
+@router.post("/explain-error")
+def explain_error(
+    req: ExplainErrorRequest,
+    request:       Request,
+    x_gemini_key:  Optional[str] = Header(None, alias="X-Gemini-Key"),
+    x_ai_key:      Optional[str] = Header(None, alias="X-AI-Key"),
+    x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
+    x_ai_model:    Optional[str] = Header(None, alias="X-AI-Model"),
+) -> Dict[str, Any]:
+    """Turn a raw backtest/setup error into a plain-language explanation plus a
+    few AI-generated fix suggestions. Used by the builder's centered error
+    dialog. Returns {explanation: str, suggestions: [str, ...]}."""
+    import os, json as _json
+
+    # Same key resolution as /chat: user-supplied key wins, else server-paid Claude.
+    user_supplied = bool((x_ai_key or "").strip() or (x_gemini_key or "").strip())
+    provider = (x_ai_provider or _DEFAULT_PROVIDER).strip().lower()
+    api_key  = (x_ai_key or "").strip()
+    if not api_key and x_gemini_key:
+        api_key  = x_gemini_key.strip()
+        provider = "gemini"
+    if not api_key:
+        if not x_ai_provider:
+            provider = _DEFAULT_PROVIDER
+        api_key = os.environ.get(_PROVIDER_ENV.get(provider, ""), "").strip()
+    if not api_key:
+        raise HTTPException(503, "AI suggestions need a key. Add one under Resources → AI Model.")
+
+    if not user_supplied:
+        from backend.api.limits import enforce_ai_quota
+        ident = request.client.host if request.client else "anon"
+        enforce_ai_quota(ident)
+
+    ctx = f"[Symbol: {req.symbol or '—'}, Timeframe: {req.timeframe or '—'}]\n"
+    if isinstance(req.graph, dict) and req.graph.get("nodes"):
+        # A trimmed node/edge summary is enough for the model to reason about wiring.
+        nodes = [{"id": n.get("id"), "type": n.get("type")} for n in req.graph.get("nodes", [])]
+        edges = req.graph.get("edges", [])
+        ctx += f"CURRENT_STRATEGY: nodes={_json.dumps(nodes, separators=(',', ':'))} edges={_json.dumps(edges, separators=(',', ':'))}\n"
+    user_msg = f"{ctx}\nERROR MESSAGE:\n{req.error.strip()}"
+
+    model = (x_ai_model or "").strip() or None
+    try:
+        raw = _call_chat(provider, api_key, _EXPLAIN_ERROR_SYSTEM,
+                         [{"role": "user", "content": user_msg}], model=model)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _normalize_api_error(provider, str(e))
+
+    parsed = _parse_model_json(raw)
+    if isinstance(parsed, dict) and isinstance(parsed.get("suggestions"), list):
+        suggestions = [str(s).strip() for s in parsed["suggestions"] if str(s).strip()][:4]
+        explanation = str(parsed.get("explanation") or "").strip()
+        return {"explanation": explanation, "suggestions": suggestions}
+    # Model didn't return clean JSON — surface its prose as the explanation.
+    return {"explanation": (raw or "").strip(), "suggestions": []}
+
+
 def _parse_model_json(raw_text: str) -> Optional[Dict[str, Any]]:
     """Parse a model reply that should be JSON, tolerating common wrappers.
 

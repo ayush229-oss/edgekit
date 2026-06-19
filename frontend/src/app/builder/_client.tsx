@@ -47,6 +47,7 @@ import { SelectedNodeToolbar }   from "@/components/builder_v2/SelectedNodeToolb
 import { GuidanceHint }          from "@/components/builder_v2/GuidanceHint";
 import { StrategyLogicBox }      from "@/components/builder_v2/StrategyLogicBox";
 import { NextStepsPanel }        from "@/components/builder_v2/NextStepsPanel";
+import { ErrorDialog }           from "@/components/builder_v2/ErrorDialog";
 import { MetricsPanel }          from "@/components/MetricsPanel";
 import { TradeManagement, type TradeMgmt } from "@/components/TradeManagement";
 import { PropFirmPanel }         from "@/components/PropFirmPanel";
@@ -763,6 +764,20 @@ function BuilderInner() {
   return (
     <div className="fixed left-0 right-0 bottom-0 top-0 flex flex-col bg-cream">
 
+      {/* ── Error / setup dialog — centered, with AI fix suggestions ── */}
+      {err && (
+        <ErrorDialog
+          error={err}
+          symbol={symbol}
+          timeframe={tf}
+          graph={(() => {
+            try { return rfToGraph(nodes, edges, name, userNodeDefs); }
+            catch { return null; }
+          })()}
+          onClose={() => setErr(null)}
+        />
+      )}
+
       {/* ── Save result modal ─────────────────────────────────────── */}
       {saveResultOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -1255,7 +1270,6 @@ function BuilderInner() {
             onToggle={() => { setChallengeEnabled((v) => !v); setStale(true); }}
             onChange={(p) => { setChallengeParams(p); setStale(true); }}
           />
-          {err && <div className="px-5 pb-3 text-xs text-terra">{err}</div>}
         </div>
       </div>
 
