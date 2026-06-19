@@ -19,7 +19,7 @@ Backend, API, and frontend scaffold all live. 10 strategy templates working end-
 | **Metrics** | ✅ WR, EV, PF, drawdown, equity curve, exit breakdown |
 | **FastAPI service** | ✅ `/strategies`, `/backtest`, `/upload-csv`, `/healthz` |
 | **Next.js frontend** | ✅ Strategy gallery + per-strategy tuner UI |
-| **Waitlist page** | ✅ `/waitlist` — Hybrid beta email capture |
+| **Signup / beta** | ✅ Clerk auth on the landing page (`/waitlist` is a legacy redirect → `/`) |
 | **Therapeutic theme** | ✅ Cream + sage palette across backend + frontend |
 
 ### 10 templates

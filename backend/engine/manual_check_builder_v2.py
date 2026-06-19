@@ -7,7 +7,7 @@ Validates:
   - EMA cross still works under the new typed-wire model
   - complexity_score returns sensible levels
 
-Run: python -m backend.engine.test_builder_v2
+Run: python -m backend.engine.manual_check_builder_v2
 """
 from __future__ import annotations
 import sys

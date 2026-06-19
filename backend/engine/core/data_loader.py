@@ -96,6 +96,7 @@ def load_csv(source: Union[str, Path, io.IOBase, bytes]) -> pd.DataFrame:
         df = pd.read_csv(source, sep="\t")
 
     df = _normalize_columns(df)
+    n_raw = len(df)
     df["time"] = _parse_time(df["time"])
     df = df.dropna(subset=["time"]).sort_values("time").reset_index(drop=True)
     for c in ("O", "H", "L", "C"):
@@ -103,6 +104,9 @@ def load_csv(source: Union[str, Path, io.IOBase, bytes]) -> pd.DataFrame:
     df = df.dropna(subset=["O", "H", "L", "C"]).reset_index(drop=True)
     if df.empty:
         raise ValueError("After cleaning, no usable OHLCV rows remain.")
+    # Record how many rows were discarded as invalid (bad time / non-numeric /
+    # blank OHLC) so the caller can surface it instead of silently dropping them.
+    df.attrs["rows_dropped"] = int(n_raw - len(df))
     return df
 
 
@@ -141,6 +145,14 @@ def validate_ohlcv(df: pd.DataFrame) -> dict:
     if bad_hl: issues["high_below_low"]  = bad_hl
     if bad_oc: issues["oc_outside_hl"]   = bad_oc
 
+    # Missing / NaN values in any OHLC column. load_csv drops these before they
+    # reach the engine, but frames built another way (other loaders, direct
+    # construction) may still carry them — flag so callers aren't silently
+    # backtesting over gaps.
+    nan_rows = int(df[["O", "H", "L", "C"]].isna().any(axis=1).sum())
+    if nan_rows:
+        issues["nan_rows"] = nan_rows
+
     # Duplicate timestamps
     dupe = int(df["time"].duplicated().sum())
     if dupe: issues["duplicate_timestamps"] = dupe
@@ -177,6 +189,7 @@ def validate_ohlcv(df: pd.DataFrame) -> dict:
     deductions = 0
     deductions += min(40, bad_hl * 5)
     deductions += min(20, bad_oc * 2)
+    deductions += min(20, issues.get("nan_rows", 0))
     deductions += min(10, dupe * 2)
     deductions += min(10, issues.get("large_time_gaps", 0) * 2)
     deductions += min(10, issues.get("outlier_wicks", 0))

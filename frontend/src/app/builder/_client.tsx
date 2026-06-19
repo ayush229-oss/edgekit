@@ -1442,7 +1442,13 @@ export default function BuilderClient() {
 
   useEffect(() => {
     if (isLoaded && !isSignedIn) {
-      router.replace("/sign-in");
+      // Preserve the return path so the user lands back on the builder after
+      // signing in (matches the middleware's auth.protect() behaviour on the
+      // other protected routes).
+      const next = encodeURIComponent(
+        window.location.pathname + window.location.search,
+      );
+      router.replace(`/sign-in?redirect_url=${next}`);
     }
   }, [isLoaded, isSignedIn, router]);
 

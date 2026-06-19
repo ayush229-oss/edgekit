@@ -23,7 +23,7 @@ edgekit/
 │   │   │   └── …                ← 9 more templates land Day 4–10
 │   │   ├── builder/
 │   │   │   └── compiler.py      ← (future) form-wizard config → Strategy instance
-│   │   └── test_smoke.py
+│   │   └── manual_smoke.py
 │   └── api/                     ← FastAPI service (Day 15+)
 ├── frontend/                    ← Next.js + Tailwind (Day 11+)
 └── docs/

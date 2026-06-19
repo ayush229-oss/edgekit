@@ -7,7 +7,7 @@ End-to-end smoke test covering Day 1 + Day 2 work:
   - Run BOTH strategies (OB+FVG+Liquidity, EMA Crossover)
   - Confirm metrics produced
 
-Run:  python -m backend.engine.test_smoke
+Run:  python -m backend.engine.manual_smoke
 """
 from __future__ import annotations
 import sys, os, tempfile

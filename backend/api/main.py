@@ -273,6 +273,9 @@ async def upload_csv(
     except Exception as e:
         raise HTTPException(400, f"CSV parse failed: {e}")
     issues   = validate_ohlcv(df)
+    dropped  = int(df.attrs.get("rows_dropped", 0))
+    if dropped:
+        issues["rows_dropped"] = dropped   # surfaced so the UI can warn the user
     pip      = infer_pip_from_df(df, symbol)
     data_id  = store.put(df)
     store.evict_oldest()
