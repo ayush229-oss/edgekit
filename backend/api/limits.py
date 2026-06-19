@@ -29,16 +29,29 @@ def enforce_backtest_quota(user: User = Depends(current_user),
                            db:   Session = Depends(get_db)) -> User:
     cap = LIMITS[user.tier]["daily_backtests"]
     if cap is None:
+        return user   # unlimited tier (Trader/Pro)
+
+    from backend.api import supa as _supa
+    # The quota can only be enforced when we can authoritatively count today's
+    # runs. backtest_runs lives in Supabase, so we need it enabled AND a stable
+    # Supabase identity (clerk_id). When neither applies — local dev without
+    # Supabase, or a header/anon caller with no clerk_id — there is no quota
+    # backend to consult, so the cap is simply not enforced (by design for dev).
+    if not (_supa.enabled() and user.clerk_id):
         return user
+
     cutoff = (datetime.utcnow() - timedelta(days=1)).isoformat()
     try:
-        from backend.api import supa as _supa
         used = _supa.count("backtest_runs", {
             "user_id":    f"eq.{user.clerk_id}",
             "created_at": f"gte.{cutoff}",
-        }) if (user.clerk_id and _supa.enabled()) else 0
+        })
     except Exception:
-        used = 0
+        # Quota backend is configured but erroring. Fail CLOSED — never grant
+        # unlimited runs because the counter is unreachable.
+        raise HTTPException(503,
+            "Couldn't verify your backtest quota right now. Please retry shortly.")
+
     if used >= cap:
         raise HTTPException(429,
             f"Daily backtest cap reached ({cap}/day on {user.tier.value}). "
