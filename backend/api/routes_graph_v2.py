@@ -333,7 +333,49 @@ class PineExportRequest(BaseModel):
     trail_params:     Dict[str, Any]  = Field(default_factory=lambda: {"buf_pips": 1})
 
 
-class ChartPreviewRequest(BaseModel):
+class SimExecutionFields(BaseModel):
+    """Every field that changes what simulate() actually produces, other than
+    the graph/data/trade-management fields each endpoint already declares
+    itself. Shared by every endpoint that runs a real simulation so Chart
+    Preview and the real backtest CANNOT structurally diverge again — a past
+    bug had Chart Preview silently ignoring the user's Settings-level spread/
+    commission/slippage, session-hours filter, and max-concurrent limit,
+    so the "what-if" preview could show trades the real backtest wouldn't."""
+    spread_pips:      float = 0.0
+    commission:       float = 0.0
+    slippage_pips:    float = 0.0
+    swap_long_pips:   float = 0.0
+    swap_short_pips:  float = 0.0
+    max_concurrent:   int   = 1
+    order_expiry:     Optional[int] = None
+    session_hours:    Optional[Tuple[int, int]] = None
+    risk_pct:         float = 0.01
+    initial_equity:   float = 100.0
+    max_risk_usd:     float = 600.0
+
+
+def _effective_sim_kwargs(req: "SimExecutionFields", strategy: "GraphV2Strategy") -> Dict[str, Any]:
+    """Resolve the actual simulate() kwargs for a run. An `execution.costs`
+    node on the canvas (written into the run context during detect()) takes
+    precedence over the request-level cost fields; `x or y` means a node
+    value of 0 defers to the request. Everything else is request-level only."""
+    cctx = getattr(strategy, "ctx", None)
+    return {
+        "spread_pips":     float(getattr(cctx, "spread_pips",   0.0) or 0.0) or req.spread_pips,
+        "commission":      float(getattr(cctx, "commission",    0.0) or 0.0) or req.commission,
+        "slippage_pips":   float(getattr(cctx, "slippage_pips", 0.0) or 0.0) or req.slippage_pips,
+        "swap_long_pips":  req.swap_long_pips,
+        "swap_short_pips": req.swap_short_pips,
+        "max_concurrent":  req.max_concurrent,
+        "order_expiry":    req.order_expiry,
+        "session_hours":   req.session_hours,
+        "risk_pct":        req.risk_pct,
+        "initial_equity":  req.initial_equity,
+        "max_risk_usd":    req.max_risk_usd,
+    }
+
+
+class ChartPreviewRequest(SimExecutionFields):
     graph:            Dict[str, Any]
     symbol:           str  = "XAUUSD"
     timeframe:        str  = "M15"
@@ -389,9 +431,6 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
                                   f"Check that every node has its required inputs wired.")
 
     try:
-        # Execution costs come from an optional `execution.costs` node the user
-        # dropped on the canvas (written into the run context during detect()).
-        cctx = getattr(strategy, "ctx", None)
         tdf = simulate(
             df, setups,
             target_r         = req.target_r,
@@ -400,9 +439,7 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
             trail_start      = req.trail_start,
             trail_params     = req.trail_params,
             pip              = pip,
-            slippage_pips    = float(getattr(cctx, "slippage_pips", 0.0) or 0.0),
-            spread_pips      = float(getattr(cctx, "spread_pips",   0.0) or 0.0),
-            commission       = float(getattr(cctx, "commission",    0.0) or 0.0),
+            **_effective_sim_kwargs(req, strategy),
         )
     except Exception as e:
         raise HTTPException(422, f"Trade simulation failed: {type(e).__name__}: {e}")
@@ -1832,7 +1869,7 @@ def export_pinescript(req: PineExportRequest) -> Dict[str, Any]:
     return {"code": code, "lines": code.count("\n") + 1}
 
 
-class GraphBacktestV2Request(BaseModel):
+class GraphBacktestV2Request(SimExecutionFields):
     graph:            Dict[str, Any]
     data_source:      Literal["mt5", "upload"] = "mt5"
     symbol:           str  = "XAUUSD"
@@ -1842,24 +1879,12 @@ class GraphBacktestV2Request(BaseModel):
     # Date range filter (YYYY-MM-DD); takes priority over n_bars when provided
     start_date:       Optional[str] = None
     end_date:         Optional[str] = None
-    # Execution costs
-    spread_pips:      float = 0.0
-    commission:       float = 0.0
-    slippage_pips:    float = 0.0
-    swap_long_pips:   float = 0.0
-    swap_short_pips:  float = 0.0
     # Trade management
     target_r:         Optional[float] = 3.0
     target_close_pct: float           = 0.5
     trail_mode:       Literal["none", "candle", "atr", "pips", "swing"] = "candle"
     trail_start:      Literal["immediate", "after_target"] = "after_target"
     trail_params:     Dict[str, Any]  = Field(default_factory=lambda: {"buf_pips": 1})
-    initial_equity:   float = 100.0
-    risk_pct:         float = 0.01
-    max_risk_usd:     float = 600.0
-    max_concurrent:   int   = 1
-    order_expiry:     Optional[int] = None
-    session_hours:    Optional[Tuple[int, int]] = None
     challenge:        Optional[ChallengeParams] = None
 
 
@@ -2261,14 +2286,6 @@ def run_v2_backtest(
     strategy = GraphV2Strategy(graph)
     setups = strategy.detect(df, {"pip": pip})
 
-    # Execution costs: an `execution.costs` node (written into the run context
-    # during detect) takes precedence; otherwise fall back to request-level
-    # cost fields. `x or y` means a node value of 0 defers to the request.
-    cctx = getattr(strategy, "ctx", None)
-    eff_slippage = (float(getattr(cctx, "slippage_pips", 0.0) or 0.0) or req.slippage_pips)
-    eff_spread   = (float(getattr(cctx, "spread_pips",   0.0) or 0.0) or req.spread_pips)
-    eff_comm     = (float(getattr(cctx, "commission",    0.0) or 0.0) or req.commission)
-
     tdf = simulate(
         df, setups,
         target_r         = req.target_r,
@@ -2276,18 +2293,8 @@ def run_v2_backtest(
         trail_mode       = req.trail_mode,
         trail_start      = req.trail_start,
         trail_params     = req.trail_params,
-        max_concurrent   = req.max_concurrent,
-        order_expiry     = req.order_expiry,
-        session_hours    = req.session_hours,
         pip              = pip,
-        spread_pips      = eff_spread,
-        commission       = eff_comm,
-        slippage_pips    = eff_slippage,
-        swap_long_pips   = req.swap_long_pips,
-        swap_short_pips  = req.swap_short_pips,
-        risk_pct         = req.risk_pct,
-        initial_equity   = req.initial_equity,
-        max_risk_usd     = req.max_risk_usd,
+        **_effective_sim_kwargs(req, strategy),
     )
     m = compute_metrics(tdf,
                        initial_equity = req.initial_equity,

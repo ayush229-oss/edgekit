@@ -36,6 +36,7 @@ import {
 import { v2ChartPreview, type ChartPreview as CP, type ChartTrade } from "@/lib/api";
 import type { V2Graph } from "@/lib/api";
 import type { TradeMgmt } from "@/components/TradeManagement";
+import { loadSettings } from "@/lib/settings";
 
 
 // ── Palette ───────────────────────────────────────────────────────────────
@@ -339,6 +340,10 @@ export function ChartPreview({
   useEffect(() => {
     if (!open || !graph || graph.nodes.length === 0) return;
     setBusy(true); setErr(null); setData(null); setSelIdx(null);
+    // Same Settings-derived execution/order fields the real Run backtest uses
+    // — otherwise the preview can show trades the real backtest wouldn't
+    // (different costs, no session-hours filter, no concurrency cap).
+    const s = loadSettings();
     v2ChartPreview({
       graph, symbol,
       timeframe: timeframe,
@@ -349,6 +354,14 @@ export function ChartPreview({
       trail_mode:       mgmt.trail_mode,
       trail_start:      mgmt.trail_start,
       trail_params:     mgmt.trail_params,
+      spread_pips:      s.spread_pips,
+      commission:       s.commission,
+      slippage_pips:    s.slippage_pips,
+      swap_long_pips:   s.swap_long_pips,
+      swap_short_pips:  s.swap_short_pips,
+      max_concurrent:   s.max_concurrent,
+      risk_pct:         s.risk_pct,
+      max_risk_usd:     s.max_risk_usd,
     })
       .then(setData)
       .catch((e) => setErr(e.message ?? String(e)))
