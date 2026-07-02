@@ -1866,6 +1866,10 @@ def export_pinescript(req: PineExportRequest) -> Dict[str, Any]:
         })
     except ValueError as e:
         raise HTTPException(400, f"Graph validation failed: {e}")
+    except Exception as e:
+        # A bare 500 strips CORS headers and the browser misreports it as a
+        # CORS error, so the user sees "Failed to fetch" with no real cause.
+        raise HTTPException(400, f"Couldn't generate Pine Script: {type(e).__name__}: {e}")
     return {"code": code, "lines": code.count("\n") + 1}
 
 

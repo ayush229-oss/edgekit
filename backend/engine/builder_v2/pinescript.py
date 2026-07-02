@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .validate import validate_graph
 from .nodes    import NODE_LIBRARY
+from .user_nodes import build_user_node_spec
 
 
 def _sanitize(node_id: str) -> str:
@@ -331,7 +332,16 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
     Convert a v2 graph + trade-management config into a Pine Script v5 strategy.
     Returns the full source string.
     """
-    graph = validate_graph(graph)
+    # Merge in this graph's own custom Formula Node definitions (same pattern
+    # GraphV2Strategy uses) — without this, any strategy built with a custom
+    # node crashes here with a bare KeyError the moment it's referenced below,
+    # since the global NODE_LIBRARY has no entry for a "user.*" type.
+    lib = dict(NODE_LIBRARY)
+    for udef in graph.get("user_defs", []):
+        spec = build_user_node_spec(udef)
+        lib[spec.type] = spec
+
+    graph = validate_graph(graph, node_library=lib)
     mgmt  = mgmt or {}
     topo  = graph["__topo__"]
     nodes = {n["id"]: n for n in graph["nodes"]}
@@ -341,7 +351,7 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
     # Bucket nodes by lane
     by_lane: Dict[str, List[str]] = {}
     for nid in topo:
-        by_lane.setdefault(NODE_LIBRARY[nodes[nid]["type"]].lane, []).append(nid)
+        by_lane.setdefault(lib[nodes[nid]["type"]].lane, []).append(nid)
 
     # Resolve incoming wires: per node, {input_port_name: parent_pine_var_name}
     # We compute these incrementally as we walk topo order.
@@ -359,7 +369,7 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
             if e["to"] != nid: continue
             parent = e["from"]; pport = e["from_port"]; tport = e["to_port"]
             # For alpha/filter chained-input edges, the parent emits long/short conds
-            if NODE_LIBRARY[nodes[parent]["type"]].lane in ("alpha", "filter"):
+            if lib[nodes[parent]["type"]].lane in ("alpha", "filter"):
                 # Pass a "tagged" name so combine nodes can swap long/short
                 lv, sv = cond_vars.get(parent, ("false", "false"))
                 inputs[tport] = f"insight_{lv}|{sv}"
@@ -371,7 +381,7 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
 
     for nid in topo:
         node = nodes[nid]
-        spec = NODE_LIBRARY[node["type"]]
+        spec = lib[node["type"]]
         in_vars = collect_inputs(nid)
 
         if spec.lane == "indicator":
@@ -404,7 +414,7 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
     final_long  = "false"
     final_short = "false"
     for nid in topo:
-        lane = NODE_LIBRARY[nodes[nid]["type"]].lane
+        lane = lib[nodes[nid]["type"]].lane
         if lane in ("alpha", "filter") and nid in cond_vars:
             final_long, final_short = cond_vars[nid]
 
@@ -445,7 +455,7 @@ def generate(graph: Dict[str, Any], mgmt: Optional[Dict[str, Any]] = None) -> st
     # ── Assemble the script ──────────────────────────────────────────────
     inputs_block: List[str] = []
     for nid in topo:
-        node = nodes[nid]; spec = NODE_LIBRARY[node["type"]]
+        node = nodes[nid]; spec = lib[node["type"]]
         for sp in spec.params:
             inputs_block.append(_input_decl(nid, node["params"], sp))
 
