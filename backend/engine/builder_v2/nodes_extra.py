@@ -23,8 +23,17 @@ def _rsi(arr: np.ndarray, period: int) -> np.ndarray:
     loss  = np.where(delta < 0, -delta, 0.0)
     avg_g = pd.Series(gain).ewm(alpha=1/period, adjust=False).mean().values
     avg_l = pd.Series(loss).ewm(alpha=1/period, adjust=False).mean().values
-    rs    = np.where(avg_l == 0, 0, avg_g / np.maximum(avg_l, 1e-9))
-    return 100 - 100 / (1 + rs)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rs = avg_g / avg_l
+    rsi = 100 - 100 / (1 + rs)
+    # avg_l == 0 makes the division above NaN/inf. Zero losses with SOME gains
+    # is maximally overbought (RSI 100); zero losses AND zero gains (a flat,
+    # unmoving market) is undefined -> the standard convention is neutral 50,
+    # not 0 (the previous `np.where(avg_l == 0, 0, ...)` collapsed both of
+    # these very different cases into 0, making a strictly-rising series read
+    # as maximally OVERSOLD and a quiet market read as maximally oversold too).
+    rsi = np.where(avg_l == 0, np.where(avg_g == 0, 50.0, 100.0), rsi)
+    return rsi
 
 
 def _bbands(arr: np.ndarray, period: int, mult: float):
