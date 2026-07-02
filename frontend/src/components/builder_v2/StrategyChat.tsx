@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   v2Chat, hasUserAIKey, getAIProvider, getAIModel, setAIModel, AI_MODEL_OPTIONS,
-  type ChatMessage, type V2Graph, type GraphDecision,
+  type ChatMessage, type V2Graph, type GraphDecision, type GraphDecisionSetting,
 } from "@/lib/api";
 import Link from "next/link";
 import { SuggestionsPanel } from "./SuggestionsPanel";
@@ -126,6 +126,7 @@ export function StrategyChat({
   const [model,       setModel]       = useState("");
   const [image,       setImage]       = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(true);
+  const [openQuestions, setOpenQuestions] = useState<string[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
@@ -234,6 +235,7 @@ export function StrategyChat({
     setInput("");
     setGraph(null);
     setDecisions([]);
+    setOpenQuestions([]);
     setErr(null);
     setTimeout(() => inputRef.current?.focus(), 50);
   }
@@ -249,6 +251,7 @@ export function StrategyChat({
     setMessages(target.messages);
     setGraph(target.graph);
     setDecisions(target.decisions);
+    setOpenQuestions([]);
     setErr(null);
     setInput("");
     setShowHistory(false);
@@ -285,6 +288,7 @@ export function StrategyChat({
 
     saveAllChats(remaining);
     setAllChats(remaining);
+    setOpenQuestions([]);
     setErr(null);
   }
 
@@ -315,11 +319,16 @@ export function StrategyChat({
       if (res.type === "graph") {
         setGraph(res.graph);
         setDecisions(res.decisions ?? []);
+        setOpenQuestions(res.open_questions ?? []);
+        const assumed = (res.decisions ?? []).reduce((n, d) => n + d.settings.filter((s) => !s.user_specified).length, 0);
         setMessages((m) => [
           ...m,
           {
             role: "assistant",
-            content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes). Review it below and click "Load onto canvas" when you're happy.`,
+            content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes).` +
+              (assumed > 0
+                ? ` I filled in **${assumed} value${assumed > 1 ? "s" : ""} you didn't mention** — check the amber ones below and edit them before loading.`
+                : ` Review it below and click "Load onto canvas" when you're happy.`),
           },
         ]);
       } else {
@@ -347,11 +356,16 @@ export function StrategyChat({
       if (res.type === "graph") {
         setGraph(res.graph);
         setDecisions(res.decisions ?? []);
+        setOpenQuestions(res.open_questions ?? []);
+        const assumed = (res.decisions ?? []).reduce((n, d) => n + d.settings.filter((s) => !s.user_specified).length, 0);
         setMessages((m) => [
           ...m,
           {
             role: "assistant",
-            content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes). Review it below and click "Load onto canvas" when you're happy.`,
+            content: `I've built your strategy: **${res.graph.name || "Custom strategy"}** (${res.graph.nodes.length} nodes).` +
+              (assumed > 0
+                ? ` I filled in **${assumed} value${assumed > 1 ? "s" : ""} you didn't mention** — check the amber ones below and edit them before loading.`
+                : ` Review it below and click "Load onto canvas" when you're happy.`),
           },
         ]);
       } else {
@@ -362,6 +376,37 @@ export function StrategyChat({
     } finally {
       setBusy(false);
     }
+  }
+
+  // ── Edit an AI-assumed value before loading — syncs decisions AND graph ──
+  function updateDecision(nodeId: string, key: string, raw: string) {
+    setDecisions((prev) => prev.map((d) => {
+      if (d.node_id !== nodeId) return d;
+      return {
+        ...d,
+        settings: d.settings.map((s) => {
+          if (s.key !== key) return s;
+          let v: any = raw;
+          if (s.type === "int")   { const n = parseInt(raw, 10); if (isNaN(n)) return s; v = n; }
+          if (s.type === "float") { const n = parseFloat(raw);   if (isNaN(n)) return s; v = n; }
+          return { ...s, value: v, is_default: v === s.default, user_specified: true };
+        }),
+      };
+    }));
+    setGraph((g) => {
+      if (!g) return g;
+      return {
+        ...g,
+        nodes: g.nodes.map((n) => {
+          if (n.id !== nodeId) return n;
+          const setting = decisions.find((d) => d.node_id === nodeId)?.settings.find((s) => s.key === key);
+          let v: any = raw;
+          if (setting?.type === "int")   { const p = parseInt(raw, 10); if (isNaN(p)) return n; v = p; }
+          if (setting?.type === "float") { const p = parseFloat(raw);   if (isNaN(p)) return n; v = p; }
+          return { ...n, params: { ...(n.params ?? {}), [key]: v } };
+        }),
+      };
+    });
   }
 
   function handleKey(e: React.KeyboardEvent) {
@@ -562,29 +607,80 @@ export function StrategyChat({
           <div ref={bottomRef} />
         </div>
 
-        {/* Decisions panel */}
+        {/* Review panel — every variable, split into "yours" vs "AI-assumed" (editable) */}
         {graph && decisions.length > 0 && (
-          <div className="mx-5 mb-2 shrink-0 rounded-xl border border-border bg-paper px-4 py-3 max-h-[180px] overflow-y-auto">
-            <div className="text-[11px] font-semibold text-ink mb-1.5">
-              Here's what I set{" "}
-              <span className="font-normal text-muted">— edit any of these on the canvas after loading</span>
+          <div className="mx-5 mb-2 shrink-0 rounded-xl border border-border bg-paper px-4 py-3 max-h-[240px] overflow-y-auto">
+            <div className="text-[11px] font-semibold text-ink mb-2">
+              Review before loading{" "}
+              <span className="font-normal text-muted">
+                — <span className="text-amber-700">⚠ amber</span> = I assumed this (you didn't say it). Edit any value right here.
+              </span>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {decisions.map((d) => (
                 <div key={d.node_id} className="text-[11.5px]">
-                  <span className="font-medium text-ink">{d.node_label}</span>
-                  <span className="text-muted">
-                    {": "}
-                    {d.settings.map((s, j) => (
-                      <span key={s.key}>
-                        {j > 0 ? ", " : ""}
-                        {s.label} = <span className={s.is_default ? "text-muted" : "text-money font-medium"}>{String(s.value)}</span>
-                      </span>
+                  <div className="font-medium text-ink mb-1">
+                    {d.node_label} <span className="text-[9.5px] text-muted uppercase">{d.lane}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {d.settings.map((s: GraphDecisionSetting) => (
+                      <label
+                        key={s.key}
+                        title={s.user_specified ? "You specified this value" : "AI assumed this value — you never mentioned it"}
+                        className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 ${
+                          s.user_specified
+                            ? "border-up/40 bg-up/5"
+                            : "border-amber-400/60 bg-amber-50"
+                        }`}
+                      >
+                        <span className="text-[10px]">{s.user_specified ? "✓" : "⚠"}</span>
+                        <span className="text-[10.5px] text-muted">{s.label}</span>
+                        {s.options ? (
+                          <select
+                            value={String(s.value)}
+                            onChange={(e) => updateDecision(d.node_id, s.key, e.target.value)}
+                            className="text-[11px] bg-transparent border-b border-border focus:outline-none font-mono"
+                          >
+                            {s.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        ) : (s.type === "int" || s.type === "float") ? (
+                          <input
+                            type="number"
+                            value={s.value}
+                            min={s.min ?? undefined}
+                            max={s.max ?? undefined}
+                            step={s.step ?? (s.type === "int" ? 1 : 0.1)}
+                            onChange={(e) => updateDecision(d.node_id, s.key, e.target.value)}
+                            className="w-16 text-[11px] bg-transparent border-b border-border focus:outline-none font-mono"
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={String(s.value)}
+                            onChange={(e) => updateDecision(d.node_id, s.key, e.target.value)}
+                            className="w-20 text-[11px] bg-transparent border-b border-border focus:outline-none font-mono"
+                          />
+                        )}
+                      </label>
                     ))}
-                  </span>
+                  </div>
                 </div>
               ))}
             </div>
+            {openQuestions.length > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-border/60">
+                <div className="text-[10.5px] font-semibold text-amber-800 mb-1">Worth deciding yourself:</div>
+                {openQuestions.map((q, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setInput(q.replace(/^I assumed /i, "About: ")); inputRef.current?.focus(); }}
+                    className="block text-left text-[11px] text-ink/80 hover:text-ink underline decoration-dotted mb-0.5"
+                  >
+                    • {q}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -602,7 +698,7 @@ export function StrategyChat({
               Load onto canvas →
             </button>
             <button
-              onClick={() => setGraph(null)}
+              onClick={() => { setGraph(null); setOpenQuestions([]); }}
               className="text-muted hover:text-ink text-sm px-1"
               title="Discard and keep refining"
             >

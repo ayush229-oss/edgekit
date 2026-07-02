@@ -470,6 +470,15 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export type GraphDecisionSetting = {
   key: string; label: string; value: any; default: any; is_default: boolean;
+  /** true = value came from the user's own words; false = AI assumed it */
+  user_specified?: boolean;
+  // Editing metadata (mirrors the node's ParamSpec) so the review panel can
+  // render the right input control.
+  type?: "int" | "float" | "select" | "string" | "bool";
+  min?: number | null;
+  max?: number | null;
+  step?: number | null;
+  options?: string[] | null;
 };
 export type GraphDecision = {
   node_id: string; node_label: string; lane: string;
@@ -477,7 +486,7 @@ export type GraphDecision = {
 };
 export type ChatResponse =
   | { type: "message"; content: string }
-  | { type: "graph"; graph: V2Graph; decisions?: GraphDecision[] };
+  | { type: "graph"; graph: V2Graph; decisions?: GraphDecision[]; open_questions?: string[] };
 
 export async function v2Chat(body: {
   messages:  ChatMessage[];
