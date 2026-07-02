@@ -1028,10 +1028,21 @@ Ask ONE clear, simple question per turn. Focus on:
   - Where does the stop loss go? (e.g. "below the last swing low", "fixed distance")
   - Any filters? (e.g. "only trade London hours", "only when trend is strong")
 Keep questions short. Use plain trader language, not technical jargon.
+You MUST use MODE 1 (do not guess) when the user's description is missing ANY of:
+  (a) the entry trigger, (b) direction (long/short/both), (c) the stop-loss idea.
+Everything else (periods, pips, R targets, trail settings) may be defaulted in MODE 2 —
+but every defaulted value MUST be declared in "user_specified" bookkeeping below.
 
 MODE 2 — BUILD (when you have enough to build a solid graph):
 Output ONLY this JSON, nothing else:
-{{"type":"graph","graph":{graph_schema}}}
+{{"type":"graph","graph":{graph_schema},"user_specified":[{{"node_id":string,"param":string}}],"open_questions":[string]}}
+
+"user_specified" lists EVERY node param whose value came directly from the user's words
+(e.g. they said "RSI 30" → the RSI threshold param is user-specified; they never mentioned
+the RSI period → period is NOT listed). Be strict: when in doubt, leave it out.
+"open_questions" (0-3 short strings) are things you assumed that most change the strategy's
+behaviour and the user may want to reconsider (e.g. "I assumed a 15-pip fixed stop — do you
+prefer a stop below the swing low?"). Empty array if nothing important was assumed.
 
 where graph matches the V2Graph schema with available nodes below.
 
@@ -1280,7 +1291,7 @@ def graph_chat(
         """Classify a model reply.
 
         Returns one of:
-          ("graph",   graph_dict)  — valid, laid-out graph ready to load
+          ("graph",   (graph_dict, user_specified, open_questions))
           ("message", text)        — a clarifying question / plain reply
           ("invalid", error_str)   — claimed a graph but it failed validation
         """
@@ -1297,7 +1308,14 @@ def graph_chat(
             except Exception as e:
                 return ("invalid", str(e))
             _layout_graph(graph)
-            return ("graph", graph)
+            uspec = result.get("user_specified")
+            if not isinstance(uspec, list):
+                uspec = []
+            oq = result.get("open_questions")
+            if not isinstance(oq, list):
+                oq = []
+            oq = [str(q) for q in oq if isinstance(q, str) and q.strip()][:3]
+            return ("graph", (graph, uspec, oq))
         if result.get("type") == "message":
             return ("message", result.get("content", ""))
         return ("message", "Tell me more about your strategy idea — what market condition should trigger a trade?")
@@ -1337,7 +1355,13 @@ def graph_chat(
         kind, payload = _build_from_raw(raw)
 
     if kind == "graph":
-        return {"type": "graph", "graph": payload, "decisions": _graph_decisions(payload)}
+        graph, uspec, open_questions = payload
+        return {
+            "type":           "graph",
+            "graph":          graph,
+            "decisions":      _graph_decisions(graph, user_specified=uspec),
+            "open_questions": open_questions,
+        }
     if kind == "message":
         return {"type": "message", "content": payload}
     # Still invalid after repair attempts — be honest instead of looping.
@@ -1470,13 +1494,23 @@ def _parse_model_json(raw_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _graph_decisions(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _graph_decisions(graph: Dict[str, Any],
+                     user_specified: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Summarize the settings the AI chose, in plain language, so the user can
     SEE every variable the engine decided (and know they're editable on canvas).
 
+    user_specified — AI-reported list of {node_id, param} pairs whose values came
+    directly from the user's own words. Every other param is an AI assumption,
+    flagged so the frontend can show it as editable-before-load.
+
     One entry per node with tunable params: {node_id, node_label, lane,
-    settings:[{key, label, value, default, is_default}]}.
+    settings:[{key, label, value, default, is_default, user_specified, ...spec}]}.
     """
+    uspec_set = set()
+    for it in (user_specified or []):
+        if isinstance(it, dict) and it.get("node_id") and it.get("param"):
+            uspec_set.add((str(it["node_id"]), str(it["param"])))
+
     out: List[Dict[str, Any]] = []
     for n in graph.get("nodes", []):
         spec = NODE_LIBRARY.get(n.get("type"))
@@ -1493,6 +1527,13 @@ def _graph_decisions(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "value":      val,
                 "default":    pspec.get("default"),
                 "is_default": val == pspec.get("default"),
+                "user_specified": (str(n.get("id")), key) in uspec_set,
+                # Editing metadata so the frontend can render the right control
+                "type":       pspec.get("type", "float"),
+                "min":        pspec.get("min"),
+                "max":        pspec.get("max"),
+                "step":       pspec.get("step"),
+                "options":    pspec.get("options"),
             })
         out.append({
             "node_id":    n.get("id"),
@@ -2072,17 +2113,14 @@ def run_v2_backtest(
         raise HTTPException(400, str(e))
 
     # ── Cache check (skip for upload data — unique per session) ──────────────
+    # Key on the FULL request body so EVERY result-affecting field busts the
+    # cache. A hand-picked subset previously omitted execution costs, risk/
+    # equity, trail params, date range, session hours and the prop-firm
+    # challenge — so changing those sliders returned a stale cached result.
+    # csv_data_id is irrelevant here (upload is excluded above).
     _cache_key = None
     if req.data_source != "upload":
-        _cache_key = {
-            "graph":      req.graph,
-            "symbol":     req.symbol,
-            "timeframe":  req.timeframe,
-            "n_bars":     req.n_bars,
-            "target_r":   req.target_r,
-            "close_pct":  req.target_close_pct,
-            "trail_mode": req.trail_mode,
-        }
+        _cache_key = req.model_dump(mode="json", exclude={"csv_data_id"})
         cached = backtest_cache.get(_cache_key)
         if cached is not None:
             return cached

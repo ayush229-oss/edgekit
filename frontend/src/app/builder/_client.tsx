@@ -35,7 +35,7 @@ import "reactflow/dist/style.css";
 
 import {
   v2ListNodes, v2ListTemplates, v2GetTemplate, v2RunBacktest, v2Complexity,
-  v2ListSymbols, forwardStart,
+  v2ListSymbols, v2MonteCarlo, forwardStart,
   type V2NodeSpec, type V2Graph, type V2Complexity as V2C,
   type TemplateSummary, type BacktestResponse, type SymbolInfo,
 } from "@/lib/api";
@@ -56,6 +56,10 @@ import type { ChallengeParams }  from "@/lib/api";
 // Lazy-load heavy/modal-only components so they don't block initial paint.
 const EquityChart = nextDynamic(
   () => import("@/components/EquityChart").then((m) => ({ default: m.EquityChart })),
+  { ssr: false }
+);
+const MonteCarloChart = nextDynamic(
+  () => import("@/components/MonteCarloChart").then((m) => ({ default: m.MonteCarloChart })),
   { ssr: false }
 );
 const ChartPreview = nextDynamic(
@@ -225,6 +229,11 @@ function BuilderInner() {
   const [result,  setResult]  = useState<BacktestResponse | null>(null);
   const [complex, setComplex] = useState<V2C | null>(null);
   const [stale,   setStale]   = useState(false);
+
+  // Monte Carlo — trade-order resampling of the last backtest's results.
+  const [mcResult, setMcResult] = useState<Awaited<ReturnType<typeof v2MonteCarlo>> | null>(null);
+  const [mcBusy,   setMcBusy]   = useState(false);
+  const [mcErr,    setMcErr]    = useState<string | null>(null);
   const [guideOn, setGuideOn] = useState(true);   // inline phrases — visible by default
 
   const [mgmt, setMgmt] = useState<TradeMgmt>({
@@ -323,7 +332,7 @@ function BuilderInner() {
   }, [nodes, edges]);     // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Mark stale on any change that affects results ──────────────────────
-  useEffect(() => { setStale(true); }, [nodes, edges, tf, bars, symbol, mgmt, dateMode, startDate, endDate]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setStale(true); setMcResult(null); setMcErr(null); }, [nodes, edges, tf, bars, symbol, mgmt, dateMode, startDate, endDate]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Port-type lookup for the connection validator
   const portTypeMap = useMemo(() => {
@@ -756,6 +765,32 @@ function BuilderInner() {
       setErr(e.message ?? String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ── Run Monte Carlo — resample the trade order N times ─────────────────
+  async function runMonteCarlo() {
+    setMcBusy(true); setMcErr(null);
+    try {
+      const graph = rfToGraph(nodes, edges, name, userNodeDefs);
+      const _s = loadSettings();
+      const res = await v2MonteCarlo({
+        graph,
+        data_source:   "mt5",
+        symbol:        symbol,
+        timeframe:     tf,
+        n_bars:        bars,
+        n_sims:        500,
+        target_r:      mgmt.target_r,
+        trail_mode:    mgmt.trail_mode,
+        spread_pips:   _s.spread_pips,
+        commission:    _s.commission,
+      });
+      setMcResult(res);
+    } catch (e: any) {
+      setMcErr(e.message ?? String(e));
+    } finally {
+      setMcBusy(false);
     }
   }
 
@@ -1404,6 +1439,42 @@ function BuilderInner() {
                   <EquityChart curve={result.equity_curve} />
                 </div>
               </div>
+
+              {/* Monte Carlo — reshuffle the trade order to see how much of the
+                  result depends on sequencing luck vs. real edge. */}
+              <div className="p-4 pt-0">
+                {!mcResult && (
+                  <div className="rounded-xl bg-cream2 border border-border p-4 flex items-center justify-between gap-3">
+                    <div className="text-xs text-muted">
+                      <span className="font-medium text-ink">Monte Carlo</span> — reshuffle these{" "}
+                      {result.metrics.trades} trades 500 times to see how much the result depends on
+                      trade order vs. genuine edge.
+                      {mcErr && <span className="text-terra block mt-1">{mcErr}</span>}
+                    </div>
+                    <button
+                      onClick={() => void runMonteCarlo()}
+                      disabled={mcBusy}
+                      className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-sage text-white hover:bg-sage/90 transition-colors font-medium disabled:opacity-40">
+                      {mcBusy ? "Simulating…" : "🎲 Run Monte Carlo"}
+                    </button>
+                  </div>
+                )}
+                {mcResult && (
+                  <>
+                    <MonteCarloChart
+                      percentiles={mcResult.percentiles}
+                      nSims={mcResult.n_sims}
+                      nTrades={mcResult.n_trades}
+                    />
+                    <button
+                      onClick={() => setMcResult(null)}
+                      className="mt-2 text-xs px-2.5 py-1 rounded bg-cream hover:bg-cream3 border border-border text-muted hover:text-ink">
+                      ↻ Re-run Monte Carlo
+                    </button>
+                  </>
+                )}
+              </div>
+
               <div className="p-4 pt-0 flex items-start gap-3">
                 <div className="flex-1">
                   <NextStepsPanel
