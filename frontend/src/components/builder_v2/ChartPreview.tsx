@@ -293,6 +293,8 @@ export function ChartPreview({
   const replayStartIdxRef = useRef<number | null>(null);
   const ribbonRef         = useRef<ISeriesApi<"Histogram"> | null>(null);
   const indicatorRefs     = useRef<ISeriesApi<"Line">[]>([]);
+  const oscSeriesRef      = useRef<ISeriesApi<any>[]>([]);
+  const oscPanesRef       = useRef<number[]>([]);
   const zonesPrimRef      = useRef<ZonesPrimitive | null>(null);
   const selPriceLinesRef  = useRef<IPriceLine[]>([]);
   // Stable refs so keyboard/pick handlers don't go stale during fast playback
@@ -434,6 +436,7 @@ export function ChartPreview({
       zonesPrimRef.current = null; posBoxPrimRef.current = null;
       startLinePrimRef.current = null;
       ribbonRef.current = null; indicatorRefs.current = [];
+      oscSeriesRef.current = []; oscPanesRef.current = [];
       selPriceLinesRef.current = [];
       lastViewCutoffRef.current = null;
       replayStartIdxRef.current = null;
@@ -452,9 +455,10 @@ export function ChartPreview({
     const savedRange = chart.timeScale().getVisibleLogicalRange();
     for (const s of indicatorRefs.current) { try { chart.removeSeries(s); } catch {} }
     indicatorRefs.current = [];
-    if (showIndicators && data.indicators && data.indicators.length > 0) {
+    const overlays = (data.indicators ?? []).filter((ind) => ind.kind !== "oscillator");
+    if (showIndicators && overlays.length > 0) {
       const styleMap = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted } as const;
-      for (const ind of data.indicators) {
+      for (const ind of overlays) {
         const series = chart.addSeries(LineSeries, {
           color: ind.color, lineWidth: ind.line_width as 1|2|3|4,
           lineStyle: styleMap[ind.line_style] ?? LineStyle.Solid,
@@ -472,6 +476,72 @@ export function ChartPreview({
       }
     }
     if (savedRange) chart.timeScale().setVisibleLogicalRange(savedRange);
+  }, [data, showIndicators]);
+
+
+  // ── Oscillator indicators (RSI/MACD/ADX/Stochastic/CCI/Williams%R/ROC) ──
+  // These don't share the candlestick's price scale, so each node gets its
+  // own pane stacked below the chart — same layout TradingView uses.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !data) return;
+
+    for (const s of oscSeriesRef.current) { try { chart.removeSeries(s); } catch {} }
+    oscSeriesRef.current = [];
+    for (const idx of [...oscPanesRef.current].sort((a, b) => b - a)) {
+      try { (chart as any).removePane(idx); } catch {}
+    }
+    oscPanesRef.current = [];
+
+    const osc = showIndicators ? (data.indicators ?? []).filter((ind) => ind.kind === "oscillator") : [];
+    if (osc.length === 0) return;
+
+    // Group series by pane_id so e.g. MACD's macd/signal/histogram share one pane.
+    const groups = new Map<string, typeof osc>();
+    for (const ind of osc) {
+      const key = ind.pane_id ?? ind.node_id;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(ind);
+    }
+
+    const styleMap = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted } as const;
+    let paneIndex = 1;   // pane 0 is the main candlestick pane
+    for (const group of groups.values()) {
+      for (const ind of group) {
+        const series = ind.series_type === "histogram"
+          ? chart.addSeries(HistogramSeries, {
+              color: ind.color, lastValueVisible: false, priceLineVisible: false, title: ind.label,
+            }, paneIndex)
+          : chart.addSeries(LineSeries, {
+              color: ind.color, lineWidth: ind.line_width as 1 | 2 | 3 | 4,
+              lineStyle: styleMap[ind.line_style] ?? LineStyle.Solid,
+              crosshairMarkerVisible: false, lastValueVisible: true, priceLineVisible: false,
+              title: ind.label,
+            }, paneIndex);
+        const points: Array<{ time: UTCTimestamp; value?: number }> = [];
+        for (let i = 0; i < data.bars.length && i < ind.values.length; i++) {
+          const v = ind.values[i];
+          const t = data.bars[i].t as UTCTimestamp;
+          points.push(v === null || v === undefined || !Number.isFinite(v) ? { time: t } : { time: t, value: v });
+        }
+        series.setData(points as any);
+        oscSeriesRef.current.push(series);
+
+        if (ind.ref_lines && ind.series_type !== "histogram") {
+          for (const lvl of ind.ref_lines) {
+            try {
+              series.createPriceLine({
+                price: lvl, color: "#8A807166", lineWidth: 1,
+                lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: "",
+              });
+            } catch { /* ignore */ }
+          }
+        }
+      }
+      try { (chart as any).panes?.()[paneIndex]?.setHeight(110); } catch { /* ignore */ }
+      oscPanesRef.current.push(paneIndex);
+      paneIndex++;
+    }
   }, [data, showIndicators]);
 
 

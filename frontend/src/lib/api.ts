@@ -274,6 +274,14 @@ export type ChartIndicator = {
   line_style: "solid" | "dashed" | "dotted";
   line_width: number;
   values:     (number | null)[];   // bar-aligned, NaN/warmup = null
+  /** "overlay" (default, drawn on the price chart) | "oscillator" (own pane below) */
+  kind?:        "overlay" | "oscillator";
+  series_type?: "line" | "histogram";
+  /** series sharing a pane_id are drawn together in one sub-pane (e.g. MACD's 3 lines) */
+  pane_id?:     string;
+  /** fixed value range for the pane's scale, e.g. [0,100] for RSI; null = auto/unbounded */
+  range?:       [number, number] | null;
+  ref_lines?:   number[];
 };
 
 export type ChartPreview = {

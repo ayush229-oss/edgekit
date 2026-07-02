@@ -65,6 +65,48 @@ _PRICE_OVERLAY_INDICATORS = {
     # shaded zone via the structural trace (see artifacts), not as three lines.
 }
 
+# Oscillators — these don't share the candlestick's price scale (RSI is 0-100,
+# MACD is unbounded, etc.), so the frontend draws each one in its own pane
+# below the chart instead of overlaying it on price. Each series tuple is
+# (cache_key_template, label_template, color, line_style, line_width, series_type).
+_OSCILLATOR_INDICATORS: Dict[str, Dict[str, Any]] = {
+    "indicator.rsi": {
+        "range": [0, 100], "ref_lines": [30, 70],
+        "series": [("rsi_{period}", "RSI {period}", "#8B5CF6", "solid", 2, "line")],
+    },
+    "indicator.macd": {
+        "range": None, "ref_lines": [0],
+        "series": [
+            ("macd_{fast}_{slow}_{signal}_m", "MACD",      "#3B82F6", "solid", 2, "line"),
+            ("macd_{fast}_{slow}_{signal}_s", "Signal",    "#F97316", "solid", 1, "line"),
+            ("macd_{fast}_{slow}_{signal}_h", "Histogram", "#8A8071", "solid", 1, "histogram"),
+        ],
+    },
+    "indicator.adx": {
+        "range": [0, 100], "ref_lines": [25],
+        "series": [("adx_{period}", "ADX {period}", "#EAB308", "solid", 2, "line")],
+    },
+    "indicator.stochastic": {
+        "range": [0, 100], "ref_lines": [20, 80],
+        "series": [
+            ("stoch_{k_period}_{d_period}_k", "%K", "#3B82F6", "solid", 2, "line"),
+            ("stoch_{k_period}_{d_period}_d", "%D", "#F97316", "solid", 1, "line"),
+        ],
+    },
+    "indicator.cci": {
+        "range": None, "ref_lines": [-100, 100],
+        "series": [("cci_{period}", "CCI {period}", "#14B8A6", "solid", 2, "line")],
+    },
+    "indicator.williams_r": {
+        "range": [-100, 0], "ref_lines": [-20, -80],
+        "series": [("wpr_{period}", "Williams %R {period}", "#EC4899", "solid", 2, "line")],
+    },
+    "indicator.roc": {
+        "range": None, "ref_lines": [0],
+        "series": [("roc_{period}", "ROC {period}", "#DC2626", "solid", 2, "line")],
+    },
+}
+
 def _extract_indicators(strategy, df) -> List[Dict[str, Any]]:
     """Walk every indicator.* node in the graph; emit its cached series
     for price-overlay-style indicators. Skips nodes whose cache keys are
@@ -132,6 +174,55 @@ def _extract_indicators(strategy, df) -> List[Dict[str, Any]]:
                 "line_style": style,    # "solid" | "dashed" | "dotted"
                 "line_width": width,
                 "values":     vals,
+                "kind":       "overlay",   # shares the candlestick's price scale
+            })
+
+    # ── Oscillators — RSI/MACD/ADX/Stochastic/CCI/Williams%R/ROC don't share
+    # the price scale, so each gets tagged with its own pane_id (grouped by
+    # originating node — MACD's 3 series stay together in one pane) plus a
+    # value range / reference-line hint the frontend uses to draw the pane.
+    for nid, node in strategy.nodes.items():
+        ntype = node["type"]
+        osc = _OSCILLATOR_INDICATORS.get(ntype)
+        if not osc:
+            continue
+        params = node.get("params", {}) or {}
+        for key_tmpl, label_tmpl, color, style, width, series_type in osc["series"]:
+            try:
+                key   = key_tmpl.format(**params)
+                label = label_tmpl.format(**params)
+            except (KeyError, IndexError):
+                continue
+            if key in seen_keys:
+                continue
+            arr = ctx.cache.get(key)
+            if arr is None:
+                continue
+            try:
+                vals: List[Any] = []
+                for v in np.asarray(arr):
+                    fv = float(v)
+                    if math.isnan(fv) or math.isinf(fv):
+                        vals.append(None)
+                    else:
+                        vals.append(fv)
+            except Exception:
+                continue
+            seen_keys.add(key)
+            out.append({
+                "id":         f"{nid}__{key}",
+                "node_id":    nid,
+                "node_type":  ntype,
+                "label":      label,
+                "color":      color,
+                "line_style": style,
+                "line_width": width,
+                "values":     vals,
+                "kind":       "oscillator",
+                "series_type": series_type,   # "line" | "histogram"
+                "pane_id":    nid,             # series from the same node share a pane
+                "range":      osc["range"],    # [lo, hi] or null (unbounded)
+                "ref_lines":  osc["ref_lines"],
             })
     return out
 
