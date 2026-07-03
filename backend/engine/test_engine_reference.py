@@ -98,24 +98,23 @@ def ref_simulate(df, setups, target_r, max_concurrent=1):
     def resolve(t, i):
         d, entry, sl, risk = t["direction"], t["entry"], t["sl"], t["risk"]
         tp = entry + target_r * risk if d == "Bull" else entry - target_r * risk
-        # Stop model (matches the engine after the bar-low fix): a gap (open
-        # beyond the stop) fills at the open; an intrabar trade-through fills at
-        # the stop price itself.
+        # Stop model: a gap (open beyond the stop) fills at the open — a stop,
+        # once triggered, becomes a MARKET order. A take-profit is the
+        # opposite: a resting LIMIT order that fills AT the target price,
+        # never at a gapped-through "better" price (real limit-order
+        # execution doesn't hand you extra profit just because the market
+        # moved further before your order was checked).
         if d == "Bull":
             if O[i] < sl:                                   # gap through SL
                 return ("Loss", (O[i] - entry) / risk, i)
-            if O[i] >= tp:                                  # favorable gap to TP
-                return ("Win", (O[i] - entry) / risk, i)
-            if H[i] >= tp:                                  # TP beats SL intrabar
+            if O[i] >= tp or H[i] >= tp:                     # TP hit — capped at tp
                 return ("Win", (tp - entry) / risk, i)
             if L[i] <= sl:
                 return ("Loss", (sl - entry) / risk, i)     # fill at the stop
         else:
             if O[i] > sl:
                 return ("Loss", (entry - O[i]) / risk, i)
-            if O[i] <= tp:
-                return ("Win", (entry - O[i]) / risk, i)
-            if L[i] <= tp:
+            if O[i] <= tp or L[i] <= tp:                     # TP hit — capped at tp
                 return ("Win", (entry - tp) / risk, i)
             if H[i] >= sl:
                 return ("Loss", (entry - sl) / risk, i)     # fill at the stop

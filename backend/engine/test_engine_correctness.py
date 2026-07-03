@@ -123,6 +123,25 @@ def test_long_gap_through_stop_is_worse_than_1R():
     assert r["pnl_r"] < -1.0
 
 
+def test_long_gap_through_target_caps_at_target_not_the_gap_price():
+    # A take-profit is a resting LIMIT order: it fills AT the target price,
+    # never at a more "favorable" gapped-through price — the opposite of a
+    # stop, which becomes a market order once triggered and DOES slip on a
+    # gap (see test_long_gap_through_stop_is_worse_than_1R above). A strategy
+    # with a 2R target must never book 9R just because one bar opened far
+    # past the target — that's not how a real broker fills a limit order.
+    df = make_df([
+        (98, 98.5, 97.5, 98),
+        (100, 100.2, 99.5, 100),   # fill at 100 (entry=100, sl=99, risk=1, target=2R -> tp=102)
+        (109.0, 110.0, 108.5, 109.5),  # opens at 109 — 9R past entry, way past the 102 target
+    ])
+    tdf = simulate(df, one_setup("Bull", 100, 99), target_r=2.0, **CLEAN)
+    r = tdf.iloc[0]
+    assert r["result"] == "Win"
+    assert r["exit_type"] == "TP1"
+    assert r["pnl_r"] == pytest.approx(2.0, abs=1e-9)   # capped at the 2R target, not 9R
+
+
 def test_short_clean_2R_win():
     # entry 100, sl 101 (risk 1), target 2R → TP 98
     df = make_df([

@@ -263,25 +263,22 @@ def simulate(
                 # already appended to trades above — skip rest of logic
                 pass
 
-            # 1) TPs
+            # 1) TPs — a take-profit is a resting LIMIT order: it fills AT the
+            # target price, never better, even if the bar gaps past it. (A
+            # stop-loss is the opposite case — once triggered it becomes a
+            # MARKET order, so it correctly fills at the worse gap-open price;
+            # see the SL_gap branch above.) Filling a TP at the gapped-through
+            # price was letting single volatile bars book many multiples of
+            # the intended target — e.g. a 2R target filling at 9R — which no
+            # real broker's limit-order execution would produce.
             while not closed and next_idx < len(tps) and remaining > 1e-9:
                 tp_price, tp_qty = tps[next_idx]
-                # Gap-through TP: bar opens past TP — fill at open (favorable gap)
+                tp_fill = tp_price
                 if direction == "Bull":
-                    if O_arr[i] >= tp_price:
-                        tp_fill = O_arr[i]   # filled at gap-open
-                        hit = True
-                    else:
-                        tp_fill = tp_price
-                        hit = H[i] >= tp_price
+                    hit = O_arr[i] >= tp_price or H[i] >= tp_price
                     r_at_tp = (tp_fill - fill_entry) / risk
                 else:
-                    if O_arr[i] <= tp_price:
-                        tp_fill = O_arr[i]
-                        hit = True
-                    else:
-                        tp_fill = tp_price
-                        hit = L[i] <= tp_price
+                    hit = O_arr[i] <= tp_price or L[i] <= tp_price
                     r_at_tp = (fill_entry - tp_fill) / risk
                 if not hit:
                     break
