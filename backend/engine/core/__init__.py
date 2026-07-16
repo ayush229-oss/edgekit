@@ -3,13 +3,13 @@ from .simulator   import simulate
 from .metrics     import compute_metrics
 from .data_loader import (
     load_csv, load_mt5, load_bridge, pip_size, infer_pip_from_df,
-    validate_ohlcv, data_source_of,
+    validate_ohlcv, data_source_of, list_indian_symbols,
 )
 from .            import indicators
 
 __all__ = [
     "simulate", "compute_metrics",
     "load_csv", "load_mt5", "load_bridge", "pip_size", "infer_pip_from_df",
-    "validate_ohlcv", "data_source_of",
+    "validate_ohlcv", "data_source_of", "list_indian_symbols",
     "indicators",
 ]

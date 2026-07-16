@@ -20,7 +20,7 @@ from backend.engine.builder_v2 import (
 )
 from backend.engine.core import (
     load_mt5, simulate, compute_metrics, infer_pip_from_df, validate_ohlcv,
-    data_source_of,
+    data_source_of, list_indian_symbols,
 )
 from backend.engine.core.metrics import compute_challenge_result
 from backend.api import store
@@ -270,23 +270,14 @@ _COMMON_SYMBOLS = [
     {"symbol": "ETHUSD", "description": "Ethereum / USD",      "category": "Crypto"},
 ]
 
-# Served via Sharekhan/yfinance (see data_loader.py), not the MT5 terminal — a broker's
-# symbol list will never include these, so they're merged in unconditionally below
-# rather than only living in the MT5-unavailable fallback path.
-_INDIAN_INDICES = [
-    {"symbol": "NIFTY",      "description": "Nifty 50",    "category": "Indian Indices"},
-    {"symbol": "BANKNIFTY",  "description": "Bank Nifty",  "category": "Indian Indices"},
-    {"symbol": "SENSEX",     "description": "BSE Sensex",  "category": "Indian Indices"},
-]
-
-
 @router.get("/symbols")
 def list_symbols() -> Dict[str, Any]:
     """
     Return symbols available for backtesting. Tries MT5 first (returns the
     actual symbols the user's broker offers); falls back to a curated common
-    set if MT5 isn't initialized. Indian indices are always appended — no
-    forex/CFD broker's MT5 feed carries them.
+    set if MT5 isn't initialized. The full Sharekhan NSE universe (indices +
+    tradable equities — served via Sharekhan/yfinance, never through MT5) is
+    always appended, since no forex/CFD broker's MT5 feed carries these.
     """
     source = "static"
     out: List[Dict[str, Any]] = _COMMON_SYMBOLS
@@ -312,7 +303,7 @@ def list_symbols() -> Dict[str, Any]:
         pass
 
     have = {s["symbol"] for s in out}
-    merged = out + [s for s in _INDIAN_INDICES if s["symbol"] not in have]
+    merged = out + [s for s in list_indian_symbols() if s["symbol"] not in have]
     merged.sort(key=lambda x: (x["category"], x["symbol"]))
     return {"source": source, "symbols": merged}
 

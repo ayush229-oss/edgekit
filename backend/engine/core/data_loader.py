@@ -511,6 +511,42 @@ def _sharekhan_resolve(symbol: str, headers: dict) -> tuple[str, int]:
     raise RuntimeError(f"Sharekhan master has no scrip for {symbol!r} on {exchange}")
 
 
+def list_indian_symbols() -> list[dict]:
+    """Full NSE (NC) universe from Sharekhan's scrip master — every index and
+    tradable equity, plus Sensex (a BSE-only index, added explicitly since
+    otherwise excluded from an NSE-scoped pull). Falls back to the 3 major
+    indices if no valid Sharekhan session exists, so the picker never breaks."""
+    fallback = [
+        {"symbol": "NIFTY",     "description": "Nifty 50",   "category": "Indian Indices"},
+        {"symbol": "BANKNIFTY", "description": "Bank Nifty", "category": "Indian Indices"},
+        {"symbol": "SENSEX",    "description": "BSE Sensex", "category": "Indian Indices"},
+    ]
+    try:
+        session = _sharekhan_session()
+        headers = _sharekhan_headers(session)
+        rows = _sharekhan_master("NC", headers)
+    except Exception:
+        return fallback
+
+    out = [{"symbol": "SENSEX", "description": "BSE Sensex", "category": "Indian Indices"}]
+    for r in rows:
+        ts = (r.get("tradingSymbol") or "").strip()
+        if not ts:
+            continue
+        company = r.get("companyName") or "NA"
+        tick = r.get("tickSize") or 0
+        group = r.get("groupName") or ""
+        if company == "NA":
+            # "Others" here is Sharekhan's catch-all for bond/debt index products
+            # (e.g. BHARATBOND-APR25) — not price-series instruments, skip them.
+            if group and group != "Others":
+                out.append({"symbol": ts, "description": group, "category": "Indian Indices"})
+        elif r.get("instType") == "EQ" and tick > 0:
+            out.append({"symbol": f"{ts}.NS", "description": company.strip()[:60],
+                        "category": "Indian Stocks"})
+    return out if len(out) > 1 else fallback
+
+
 def _load_sharekhan(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
     import httpx
 
