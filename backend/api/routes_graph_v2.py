@@ -270,36 +270,51 @@ _COMMON_SYMBOLS = [
     {"symbol": "ETHUSD", "description": "Ethereum / USD",      "category": "Crypto"},
 ]
 
+# Served via Sharekhan/yfinance (see data_loader.py), not the MT5 terminal — a broker's
+# symbol list will never include these, so they're merged in unconditionally below
+# rather than only living in the MT5-unavailable fallback path.
+_INDIAN_INDICES = [
+    {"symbol": "NIFTY",      "description": "Nifty 50",    "category": "Indian Indices"},
+    {"symbol": "BANKNIFTY",  "description": "Bank Nifty",  "category": "Indian Indices"},
+    {"symbol": "SENSEX",     "description": "BSE Sensex",  "category": "Indian Indices"},
+]
+
 
 @router.get("/symbols")
 def list_symbols() -> Dict[str, Any]:
     """
     Return symbols available for backtesting. Tries MT5 first (returns the
     actual symbols the user's broker offers); falls back to a curated common
-    set if MT5 isn't initialized.
+    set if MT5 isn't initialized. Indian indices are always appended — no
+    forex/CFD broker's MT5 feed carries them.
     """
+    source = "static"
+    out: List[Dict[str, Any]] = _COMMON_SYMBOLS
+
     try:
         import MetaTrader5 as mt5    # type: ignore
         if not mt5.initialize():
             raise RuntimeError("MT5 not initialized")
         syms = mt5.symbols_get() or []
-        out  = []
+        mt5_out = []
         for s in syms:
             try:
-                out.append({
+                mt5_out.append({
                     "symbol":      s.name,
                     "description": (s.description or s.name).strip()[:60],
                     "category":    (s.path.split("\\")[0] if s.path else "Other"),
                 })
             except Exception:
                 continue
-        if out:
-            # Sort by category then symbol for cleaner UX
-            out.sort(key=lambda x: (x["category"], x["symbol"]))
-            return {"source": "mt5", "symbols": out}
+        if mt5_out:
+            source, out = "mt5", mt5_out
     except Exception:
         pass
-    return {"source": "static", "symbols": _COMMON_SYMBOLS}
+
+    have = {s["symbol"] for s in out}
+    merged = out + [s for s in _INDIAN_INDICES if s["symbol"] not in have]
+    merged.sort(key=lambda x: (x["category"], x["symbol"]))
+    return {"source": source, "symbols": merged}
 
 
 @router.get("/templates")
