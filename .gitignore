@@ -19,6 +19,7 @@ Thumbs.db
 *.log
 .env
 .env.local
+.sharekhan_session.json
 data/cache/
 *.pkl
 *.csv.bak
@@ -34,3 +35,5 @@ out/
 bridge/start_edgekit_bridge.ps1
 *anthropic_key*
 *_token*.txt
+
+.vercel

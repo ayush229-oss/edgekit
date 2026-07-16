@@ -439,12 +439,128 @@ def _load_dukascopy(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataF
     return _set_source(df, "dukascopy", "feed", symbol, f"Dukascopy · {symbol}")
 
 
+# ─── Sharekhan (Indian equities/indices) — official exchange data, no key cost ──
+# Access token is short-lived (~10-11h) with no refresh flow; re-issued by
+# manually running backend/scripts/sharekhan_refresh.py. If the saved session
+# is missing/expired, _load_sharekhan raises immediately so callers fall back
+# to yfinance — this must never hard-fail a request.
+_SHAREKHAN_ROOT = "https://api.sharekhan.com"
+_SHAREKHAN_INTERVAL = {
+    "M1": "1minute", "M5": "5minute", "M15": "15minute", "H1": "60minute", "D1": "daily",
+}
+# Bare index names — exchange varies by index (NSE vs BSE), can't assume one
+# default the way *.NS/*.BO suffixes let us for individual stocks.
+_SHAREKHAN_INDEX_ALIAS: dict[str, tuple[str, str]] = {
+    "NIFTY":     ("NC", "NIFTY"),
+    "NIFTY50":   ("NC", "NIFTY"),
+    "BANKNIFTY": ("NC", "NiftyBank"),
+    "SENSEX":    ("BC", "SENSEX"),
+}
+_sharekhan_master_cache: dict[str, list[dict]] = {}
+
+
+def _sharekhan_session() -> dict:
+    import json, time
+    path = Path(__file__).resolve().parent.parent.parent / ".sharekhan_session.json"
+    if not path.exists():
+        raise RuntimeError("No Sharekhan session — run backend/scripts/sharekhan_refresh.py")
+    session = json.loads(path.read_text())
+    if session["expires_at"] <= time.time() + 60:
+        raise RuntimeError("Sharekhan session expired — run backend/scripts/sharekhan_refresh.py")
+    return session
+
+
+def _sharekhan_headers(session: dict) -> dict:
+    import os
+    return {
+        "api-key":      os.environ.get("SHAREKHAN_API_KEY", ""),
+        "access-token": session["access_token"],
+        "Content-type": "application/json",
+    }
+
+
+def _sharekhan_master(exchange: str, headers: dict) -> list[dict]:
+    import httpx
+    if exchange in _sharekhan_master_cache:
+        return _sharekhan_master_cache[exchange]
+    r = httpx.get(f"{_SHAREKHAN_ROOT}/skapi/services/master/{exchange}",
+                  headers=headers, timeout=30.0)
+    r.raise_for_status()
+    rows = r.json().get("data") or []
+    _sharekhan_master_cache[exchange] = rows
+    return rows
+
+
+def _sharekhan_resolve(symbol: str, headers: dict) -> tuple[str, int]:
+    """Map an Edgekit symbol to a (exchange, scripCode) pair via the cached
+    scrip master. Raises if not found — caller falls back to yfinance."""
+    s = symbol.upper().strip()
+    if s in _SHAREKHAN_INDEX_ALIAS:
+        exchange, target = _SHAREKHAN_INDEX_ALIAS[s]
+        target = target.upper()
+    elif s.endswith(".BO"):
+        exchange, target = "BC", s[:-3]
+    elif s.endswith(".NS"):
+        exchange, target = "NC", s[:-3]
+    else:
+        exchange, target = "NC", s   # bare tickers default to NSE Cash
+
+    for row in _sharekhan_master(exchange, headers):
+        if (row.get("tradingSymbol") or "").upper() == target:
+            return exchange, row["scripCode"]
+    raise RuntimeError(f"Sharekhan master has no scrip for {symbol!r} on {exchange}")
+
+
+def _load_sharekhan(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
+    import httpx
+
+    interval = _SHAREKHAN_INTERVAL.get(timeframe.upper())
+    if interval is None:
+        raise ValueError(f"Unsupported timeframe for Sharekhan: {timeframe}")
+
+    session = _sharekhan_session()
+    headers = _sharekhan_headers(session)
+    exchange, scrip_code = _sharekhan_resolve(symbol, headers)
+
+    r = httpx.get(
+        f"{_SHAREKHAN_ROOT}/skapi/services/historical/{exchange}/{scrip_code}/{interval}",
+        headers=headers, timeout=30.0,
+    )
+    r.raise_for_status()
+    body = r.json()
+    if body.get("status") != 200:
+        raise RuntimeError(f"Sharekhan historical data error: {body}")
+
+    rows = body.get("data") or []
+    if not rows:
+        raise RuntimeError(f"Sharekhan returned no bars for {symbol} {timeframe}")
+
+    df = pd.DataFrame(rows)
+    # tradeDate is D/M/YYYY (not zero-padded) — dayfirst parse, combined with time.
+    df["time"] = pd.to_datetime(df["tradeDate"] + " " + df["tradeTime"], dayfirst=True)
+    df = df.rename(columns={"open": "O", "high": "H", "low": "L", "close": "C", "qty": "V"})
+    keep = [c for c in ("time", "O", "H", "L", "C", "V") if c in df.columns]
+    df = df[keep].sort_values("time").reset_index(drop=True)
+    if len(df) > n_bars:
+        df = df.iloc[-n_bars:].reset_index(drop=True)
+    return _set_source(df, "sharekhan", "api", symbol, f"Sharekhan · {symbol}")
+
+
+def _is_indian_symbol(symbol: str) -> bool:
+    s = symbol.upper().strip()
+    return s in _SHAREKHAN_INDEX_ALIAS or s.endswith(".NS") or s.endswith(".BO")
+
+
 def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
     """Resolve real bars for a symbol/timeframe, with caching + fallbacks.
 
     Resolution order:
       • Windows (dev): local MT5 terminal.
       • Linux (VPS):   MT5 bridge (user's PC) → Dukascopy (free, no key) → yfinance.
+      • Indian symbols (NIFTY/BANKNIFTY/SENSEX, *.NS, *.BO): Sharekhan (official
+        exchange data, daily/weekly go back to 2000; intraday capped to a small
+        fixed recent window) is tried ahead of Dukascopy/yfinance whenever a
+        valid session is saved — falls straight through if not.
     The returned frame carries its origin in ``df.attrs['data_source']`` so the
     API and UI can show exactly which data was used (no more silent swaps).
     """
@@ -465,6 +581,12 @@ def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
             # non-forex symbols like NIFTY/RELIANCE.NS) the broker just doesn't
             # list this symbol — fall through to Dukascopy/yfinance either way.
             df = None
+
+    if df is None and _is_indian_symbol(symbol):
+        try:
+            df = _load_sharekhan(symbol, timeframe, n_bars)
+        except Exception:
+            df = None   # no/expired session, unsupported timeframe, or unknown scrip
 
     if df is None:
         # VPS path (or terminal unavailable): prefer the user's MT5 bridge, then
