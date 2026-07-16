@@ -460,8 +460,11 @@ def load_mt5(symbol: str, timeframe: str, n_bars: int = 5000) -> pd.DataFrame:
     if sys.platform == "win32":
         try:
             df = _load_mt5_terminal(symbol, timeframe, n_bars)
-        except ImportError:
-            df = None   # MT5 package missing even on Windows — fall through
+        except Exception:
+            # MT5 package missing, terminal not connected, or (most commonly for
+            # non-forex symbols like NIFTY/RELIANCE.NS) the broker just doesn't
+            # list this symbol — fall through to Dukascopy/yfinance either way.
+            df = None
 
     if df is None:
         # VPS path (or terminal unavailable): prefer the user's MT5 bridge, then
@@ -497,6 +500,10 @@ _YF_SYMBOL_MAP: dict[str, str] = {
     "US500":  "^GSPC", "SPX": "^GSPC",
     "US100":  "^NDX",  "NDX": "^NDX",
     "US30":   "^DJI",  "DJI": "^DJI",
+    # Indian indices
+    "NIFTY": "^NSEI", "NIFTY50": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+    "SENSEX": "^BSESN",
 }
 
 _YF_INTERVAL_MAP: dict[str, str] = {
@@ -596,6 +603,8 @@ def pip_size(symbol: str | None = None, price_sample: float | None = None) -> fl
         if any(c in s for c in ("JPN225", "N225", "NIK")):        return 1.0
         if any(c in s for c in ("AUS200", "ASX")):                return 0.5
         if any(c in s for c in ("NIFTY", "BANKNIFTY", "SENSEX")): return 1.0
+        # NSE/BSE individual stocks (Yahoo suffix) — exchange-wide tick size
+        if s.endswith(".NS") or s.endswith(".BO"):                return 0.05
         # Energies
         if any(c in s for c in ("OIL", "BRENT", "WTI", "USOIL", "UKOIL")):
             return 0.01

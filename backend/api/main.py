@@ -194,6 +194,78 @@ def healthz():
     }
 
 
+@app.get("/healthz/deep")
+def healthz_deep(db: Session = Depends(get_db)):
+    """Exercises every dependency the app relies on. Never raises — each
+    check catches its own errors so one broken dependency doesn't blank the
+    whole panel. `ok=False` = broken; `ok=True, warn=True` = degraded but
+    non-fatal (matches the admin dashboard's CheckResult schema)."""
+    checks: dict = {}
+
+    # Local DB (SQLite/Postgres via SQLAlchemy)
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        checks["database"] = {"ok": True, "msg": "Connected"}
+    except Exception as e:
+        checks["database"] = {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+    # Strategy registry
+    n = len(REGISTRY)
+    checks["strategies"] = (
+        {"ok": True, "msg": f"{n} strategies loaded"} if n > 0
+        else {"ok": False, "msg": "Registry empty — no strategies loaded"}
+    )
+
+    # Backtest cache
+    try:
+        from backend.api.cache import backtest_cache
+        s = backtest_cache.stats()
+        checks["cache"] = {"ok": True, "msg": f"{s['live']}/{s['total']} live entries"}
+    except Exception as e:
+        checks["cache"] = {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+    # Supabase (best-effort store — app runs without it, so absence is a warning)
+    try:
+        from backend.api import supa
+        if not supa.enabled():
+            checks["supabase"] = {"ok": True, "warn": True, "msg": "Not configured — backtest history/forward tests disabled"}
+        else:
+            n_profiles = supa.count("profiles")
+            checks["supabase"] = {"ok": True, "msg": f"Connected · {n_profiles} profiles"}
+    except Exception as e:
+        checks["supabase"] = {"ok": False, "msg": f"Configured but unreachable: {type(e).__name__}: {e}"}
+
+    # Forward-test background scheduler
+    import backend.api.routes_forward as _fwd
+    checks["forward_scheduler"] = (
+        {"ok": True, "msg": "Running"} if _fwd._scheduler_started
+        else {"ok": False, "msg": "Not started"}
+    )
+
+    # API key enforcement (intentionally fail-open — see comment above)
+    checks["api_key_enforcement"] = (
+        {"ok": True, "msg": "Enforced"} if _API_KEY
+        else {"ok": True, "warn": True, "msg": "EDGEKIT_API_KEY not set — enforcement disabled (fail-open)"}
+    )
+
+    # Lemon Squeezy billing webhook
+    from backend.api.billing import WEBHOOK_SECRET as _LS_SECRET
+    checks["billing_webhook"] = (
+        {"ok": True, "msg": "Configured"} if _LS_SECRET
+        else {"ok": True, "warn": True, "msg": "LEMON_SQUEEZY_WEBHOOK_SECRET not set — billing webhooks disabled"}
+    )
+
+    # Sentry error tracking
+    checks["sentry"] = (
+        {"ok": True, "msg": "Configured"} if _SENTRY_DSN
+        else {"ok": True, "warn": True, "msg": "SENTRY_DSN not set — error tracking disabled"}
+    )
+
+    overall_ok = all(c["ok"] for c in checks.values())
+    return {"ok": overall_ok, "checks": checks}
+
+
 # ─── Global stats (landing page counters) ─────────────────────────────────────
 @app.get("/stats/global")
 def global_stats(db: Session = Depends(get_db)):
