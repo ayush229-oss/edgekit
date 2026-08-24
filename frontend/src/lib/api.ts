@@ -1,5 +1,7 @@
 // Edgekit API client — thin fetch wrapper.
 //
+import { sanitizeBaseUrl, sanitizeHeaderValue } from "@/lib/sanitize-url";
+
 // API_URL resolution strategy:
 //   • Browser:  /api  → goes through Next.js rewrite to the backend.
 //               This way the friend-shareable Cloudflare tunnel only needs
@@ -11,22 +13,24 @@
 //               (e.g. when hosting backend on a different domain).
 export const API_URL =
   typeof window === "undefined"
-    // Server-side (SSR/RSC): call VPS directly; on Vercel default to VPS IP.
-    // Strip BOM/non-printables — Vercel env values can carry a BOM prefix
-    // that makes fetch() reject the URL.
-    ? (process.env.NEXT_PUBLIC_API_URL ||
-       (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765"))
-        .replace(/[^\x20-\x7E]/g, "").trim()
+    // Server-side (SSR/RSC): call the backend directly; on Vercel default to Render.
+    // sanitizeBaseUrl strips BOMs, quotes, Markdown link wrappers and trailing
+    // slashes, and falls back to the default if the env value is unsalvageable —
+    // otherwise one malformed variable breaks all 27 `${API_URL}/…` call sites.
+    ? sanitizeBaseUrl(
+        process.env.NEXT_PUBLIC_API_URL,
+        process.env.VERCEL ? "https://edgekit-v2.onrender.com" : "http://127.0.0.1:8765",
+      )
     // Browser: always use /api proxy to avoid mixed-content (HTTPS → HTTP) blocks
     : "/api";
 
 // fetch wrapper that injects the shared API key on SERVER-side calls only.
-// Server (SSR/RSC) calls hit the VPS directly and must carry the key.
+// Server (SSR/RSC) calls hit the backend directly and must carry the key.
 // Browser calls go through /api → the Next.js middleware injects the key there,
 // so we must NOT expose it client-side (window defined → no header added).
 export function efetch(input: string, init: Parameters<typeof fetch>[1] = {}): Promise<Response> {
   if (typeof window === "undefined" && process.env.EDGEKIT_API_KEY) {
-    const apiKey = process.env.EDGEKIT_API_KEY.replace(/[^\x20-\x7E]/g, "");
+    const apiKey = sanitizeHeaderValue(process.env.EDGEKIT_API_KEY);
     if (apiKey) {
       init = { ...init, headers: { ...(init?.headers || {}), "x-api-key": apiKey } };
     }
