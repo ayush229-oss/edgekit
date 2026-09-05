@@ -659,6 +659,34 @@ def from_text(
         raise HTTPException(500, f"AI generation crashed: {type(e).__name__}: {str(e)[:300]}")
 
 
+# Shared by /node-from-text and /node-chat. This lived nested inside
+# node_from_text, so node_chat's two calls to it raised NameError at runtime --
+# invisible because backend/ruff.toml had F821 (undefined-name) in its ignore list.
+VALID_LANES = {"indicator", "alpha", "filter", "sizing", "risk", "exit"}
+
+
+def _validate_node_def(d: Dict) -> None:
+    if not isinstance(d.get("label"), str) or not d["label"].strip():
+        raise ValueError("Missing label.")
+    lane = d.get("lane", "indicator")
+    if lane not in VALID_LANES:
+        raise ValueError(f"Invalid lane '{lane}'. Must be one of {sorted(VALID_LANES)}.")
+    if not isinstance(d.get("formulas"), dict) or not d["formulas"]:
+        raise ValueError("formulas must be a non-empty object.")
+    if lane == "indicator":
+        outputs = d.get("outputs", [])
+        if not outputs:
+            raise ValueError("indicator nodes must have at least one output.")
+        for o in outputs:
+            if o.get("type") not in ("series", "number"):
+                raise ValueError(f"Output type must be 'series' or 'number', got: {o.get('type')}")
+            if not d["formulas"].get(o["name"]):
+                raise ValueError(f"Missing formula for output '{o['name']}'.")
+    else:
+        # Non-indicator: must have a "main" formula
+        if not d["formulas"].get("main"):
+            raise ValueError(f"{lane} node must have a 'main' formula.")
+
 # ─── Node-from-text: generate a single custom indicator node ─────────────────
 
 _NODE_FROM_TEXT_SYSTEM = """You are an expert quantitative trading developer building nodes for a visual strategy builder.
@@ -777,29 +805,7 @@ def node_from_text(
         except Exception as e:
             raise _normalize_api_error(provider, str(e))
 
-    VALID_LANES = {"indicator", "alpha", "filter", "sizing", "risk", "exit"}
 
-    def _validate_node_def(d: Dict) -> None:
-        if not isinstance(d.get("label"), str) or not d["label"].strip():
-            raise ValueError("Missing label.")
-        lane = d.get("lane", "indicator")
-        if lane not in VALID_LANES:
-            raise ValueError(f"Invalid lane '{lane}'. Must be one of {sorted(VALID_LANES)}.")
-        if not isinstance(d.get("formulas"), dict) or not d["formulas"]:
-            raise ValueError("formulas must be a non-empty object.")
-        if lane == "indicator":
-            outputs = d.get("outputs", [])
-            if not outputs:
-                raise ValueError("indicator nodes must have at least one output.")
-            for o in outputs:
-                if o.get("type") not in ("series", "number"):
-                    raise ValueError(f"Output type must be 'series' or 'number', got: {o.get('type')}")
-                if not d["formulas"].get(o["name"]):
-                    raise ValueError(f"Missing formula for output '{o['name']}'.")
-        else:
-            # Non-indicator: must have a "main" formula
-            if not d["formulas"].get("main"):
-                raise ValueError(f"{lane} node must have a 'main' formula.")
 
     try:
         raw = _call()
@@ -931,28 +937,17 @@ def _call_gemini(api_key: str, system_prompt: str, user_prompt: str,
     except ImportError:
         raise HTTPException(503, "google-genai SDK not installed on server.")
 
-    response_schema = {
-        "type": "object",
-        "properties": {
-            "name":  {"type": "string"},
-            "nodes": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"}, "type": {"type": "string"}, "params": {"type": "object"},
-                },
-                "required": ["id", "type", "params"],
-            }},
-            "edges": {"type": "array", "items": {
-                "type": "object",
-                "properties": {
-                    "from": {"type": "string"}, "to": {"type": "string"},
-                    "from_port": {"type": "string"}, "to_port": {"type": "string"},
-                },
-                "required": ["from", "to", "from_port", "to_port"],
-            }},
-        },
-        "required": ["name", "nodes", "edges"],
-    }
+    # No response_schema here, deliberately. A node's `params` is free-form --
+    # every node type takes different keys -- and Gemini's schema dialect has no
+    # way to express "object with arbitrary keys": it rejects an OBJECT that
+    # declares no properties. The schema this function used to send did exactly
+    # that (`"params": {"type": "object"}`), so Gemini refused the request and
+    # the error came back mentioning GenerateContentRequest -- which the old
+    # error classifier then mislabelled a rate limit.
+    #
+    # response_mime_type still guarantees syntactically valid JSON, and the
+    # caller validates the result with validate_graph() and retries once with
+    # the validation error fed back, so structure is enforced where it can be.
     try:
         client = genai.Client(api_key=api_key)
     except Exception as e:
@@ -973,7 +968,6 @@ def _call_gemini(api_key: str, system_prompt: str, user_prompt: str,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             response_mime_type="application/json",
-            response_schema=response_schema,
             temperature=0.3,
         ),
     )

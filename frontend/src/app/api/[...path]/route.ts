@@ -16,7 +16,14 @@ const BACKEND_URL = sanitizeBaseUrl(
 // content-encoding/content-length headers then describe the compressed bytes —
 // passing them through corrupts the response (empty body downstream). Letting
 // the backend reply uncompressed sidesteps the whole mismatch.
-const FORWARD_HEADERS = ["content-type", "authorization", "accept", "accept-language"];
+// NB: the x-ai-* headers carry a user's own AI provider key for bring-your-own-key
+// generation. They were missing from this list, so the browser set them, the proxy
+// dropped them, and the backend silently fell back to the server key -- BYOK could
+// never work from the browser at all.
+const FORWARD_HEADERS = [
+  "content-type", "authorization", "accept", "accept-language",
+  "x-ai-key", "x-ai-provider", "x-gemini-key",
+];
 
 // Response headers that no longer describe the decoded body we forward.
 const STRIP_RESPONSE_HEADERS = new Set([

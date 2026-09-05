@@ -11,6 +11,10 @@ ignore = [
   "F401",   # imported but unused
   "F541",   # f-string without placeholders
   "F811",   # redefinition of unused name
-  "F821",   # undefined name
   "F841",   # local variable assigned but never used
 ]
+
+# F821 (undefined name) is deliberately NOT ignored. It is the one lint here
+# that catches guaranteed runtime crashes rather than style: it was suppressed
+# while node_chat called _validate_node_def, a function nested inside a
+# different route, and every such call raised NameError in production.
