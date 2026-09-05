@@ -1,0 +1,44 @@
+name: Keep backend awake
+
+# Render's free tier suspends a service after ~15 minutes with no traffic, and
+# waking it takes ~23s (measured). The Vercel proxy in front of it gives up long
+# before that, so the first visitor after a quiet spell sees an error rather than
+# a slow page. Pinging /healthz on a schedule keeps the instance resident.
+#
+# Caveats worth knowing:
+#   • GitHub's scheduler is best-effort and can drift by 10+ minutes under load,
+#     so the interval is deliberately tighter than Render's 15-minute window.
+#   • GitHub disables cron workflows after 60 days with no repo activity. If the
+#     repo goes quiet, re-enable this from the Actions tab.
+#   • Delete this workflow once the backend moves to a paid, always-on plan.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# Never let a slow ping queue up behind the previous one.
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    name: Ping /healthz
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Wake the backend
+        run: |
+          URL="${{ vars.BACKEND_URL || 'https://edgekit-v2.onrender.com' }}/healthz"
+          echo "Pinging $URL"
+          # --max-time 90 comfortably exceeds a cold start; retries cover the
+          # case where the instance is mid-wake and briefly refuses connections.
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
+                   --max-time 90 --retry 3 --retry-all-errors --retry-delay 10 \
+                   "$URL")
+          echo "HTTP $code in $(cat /tmp/health.json | head -c 200)"
+          if [ "$code" != "200" ]; then
+            echo "::error::Backend health check returned $code"
+            exit 1
+          fi
