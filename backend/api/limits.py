@@ -7,6 +7,7 @@ import json
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 from fastapi import HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -94,41 +95,89 @@ _AI_FILE  = Path(os.environ.get("EDGEKIT_DATA_DIR",
 SERVER_AI_DAILY_CAP = int(os.environ.get("SERVER_AI_DAILY_CAP", "40"))
 
 
-def _load_ai_usage() -> dict:
+def _load_usage(path: Path) -> dict:
     try:
-        if _AI_FILE.exists():
-            return json.loads(_AI_FILE.read_text())
+        if path.exists():
+            return json.loads(path.read_text())
     except Exception:
         pass
     return {}
 
 
-def _save_ai_usage(data: dict) -> None:
+def _save_usage(path: Path, data: dict) -> None:
     try:
-        _AI_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _AI_FILE.write_text(json.dumps(data))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
     except Exception:
         pass   # disk write failed — graceful degradation
 
 
-def enforce_ai_quota(identity: str, cap: int = SERVER_AI_DAILY_CAP) -> None:
-    """Raise 429 once `identity` has used `cap` server-paid AI calls today.
-    Usage is persisted to disk so it survives restarts."""
+def _enforce_daily_cap(path: Path, lock: threading.Lock, identity: str,
+                       cap: int, detail: str) -> None:
+    """Shared counter for per-identity, per-day caps, persisted to `path`.
+
+    Best-effort by design: if the disk write fails the request is still served
+    rather than 500ing. Note that on an ephemeral filesystem (Render's free
+    tier) the counter resets whenever the instance restarts, so treat these
+    caps as abuse-dampening rather than hard billing limits.
+    """
     today = datetime.utcnow().strftime("%Y-%m-%d")
     key   = f"{identity or 'anon'}::{today}"
 
-    with _AI_LOCK:
-        usage = _load_ai_usage()
+    with lock:
+        usage = _load_usage(path)
 
         # Prune keys from previous days to keep file small
         usage = {k: v for k, v in usage.items() if k.endswith(today)}
 
         used = usage.get(key, 0)
         if used >= cap:
-            raise HTTPException(
-                429,
-                "You've hit today's limit on the free AI assistant. Add your own "
-                "API key under Resources → AI Model to keep going, or try again tomorrow.",
-            )
+            raise HTTPException(429, detail)
         usage[key] = used + 1
-        _save_ai_usage(usage)
+        _save_usage(path, usage)
+
+
+def enforce_ai_quota(identity: str, cap: int = SERVER_AI_DAILY_CAP) -> None:
+    """Raise 429 once `identity` has used `cap` server-paid AI calls today."""
+    _enforce_daily_cap(
+        _AI_FILE, _AI_LOCK, identity, cap,
+        "You've hit today's limit on the free AI assistant. Add your own "
+        "API key under Resources → AI Model to keep going, or try again tomorrow.",
+    )
+
+
+# ── Anonymous compute guard ───────────────────────────────────────────────────
+# The /graph/v2 backtest, sweep, chart-preview, walk-forward and monte-carlo
+# routes are deliberately open so visitors can try the builder without signing
+# up. Unmetered, though, they let anyone burn the backend's CPU indefinitely —
+# a single sweep is ~25s of work. Signed-in callers are skipped here because
+# their plan quotas (enforce_backtest_quota) already apply.
+
+_COMPUTE_LOCK = threading.Lock()
+_COMPUTE_FILE = Path(os.environ.get("EDGEKIT_DATA_DIR",
+                                    str(Path(__file__).parent.parent / "tmp"))) / "compute_usage.json"
+ANON_COMPUTE_DAILY_CAP = int(os.environ.get("ANON_COMPUTE_DAILY_CAP", "30"))
+
+
+def enforce_anon_compute_quota(
+    request,
+    authorization: Optional[str] = None,
+    x_dev_user:    Optional[str] = None,
+    cap: int = ANON_COMPUTE_DAILY_CAP,
+) -> None:
+    """Cap anonymous compute-heavy calls per client IP per day.
+
+    A caller presenting any credential is left alone — this guard exists only
+    to stop unauthenticated traffic monopolising a single-instance backend.
+    """
+    if (authorization or "").strip() or (x_dev_user or "").strip():
+        return
+
+    client = getattr(request, "client", None) if request is not None else None
+    identity = getattr(client, "host", None) or "anon"
+
+    _enforce_daily_cap(
+        _COMPUTE_FILE, _COMPUTE_LOCK, identity, cap,
+        f"You've used today's {cap} free runs. Sign in to keep backtesting — "
+        "signed-in accounts get their own higher limit.",
+    )

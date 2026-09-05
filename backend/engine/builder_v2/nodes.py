@@ -112,7 +112,7 @@ def _donchian(df: pd.DataFrame, period: int) -> Tuple[np.ndarray, np.ndarray]:
     type="universe.single_asset",
     lane="universe",
     label="Single asset",
-    description="Trade exactly one instrument. The default — switch to multi_asset for portfolios.",
+    description="Trade exactly one instrument.",
     outputs=[("symbol", PortType.SYMBOL)],
     params=[
         {"key": "ticker",    "label": "Ticker",    "type": "string", "default": "XAUUSD"},
