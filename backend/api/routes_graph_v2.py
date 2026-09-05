@@ -9,6 +9,7 @@ frontend is migrated).
   POST /graph/v2/backtest           — run backtest against a v2 graph
 """
 from __future__ import annotations
+import os
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from pydantic import BaseModel, Field
@@ -29,7 +30,13 @@ from backend.api.schemas import BacktestResponse, BacktestMetrics, ChallengePara
 from backend.db import get_db
 
 
+from backend.api.limits import enforce_anon_compute_quota
+
 router = APIRouter(prefix="/graph/v2", tags=["graph_v2"])
+
+# Upper bound on a parameter sweep grid. ~2s of engine time per combination
+# and a 60s ceiling on the proxy in front of us; see the check in param_sweep.
+MAX_SWEEP_COMBOS = int(os.environ.get("MAX_SWEEP_COMBOS", "25"))
 
 
 # ─── Indicator series extractor ───────────────────────────────────────────
@@ -397,7 +404,12 @@ class ChartPreviewRequest(SimExecutionFields):
 
 
 @router.post("/chart-preview")
-def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
+def chart_preview(
+    req: ChartPreviewRequest,
+    request:       Request,
+    x_dev_user:    Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
     """
     Return bars + trade markers for visualizing the strategy on the chart.
     Frontend renders the candles + entry/exit markers + SL lines.
@@ -406,6 +418,8 @@ def chart_preview(req: ChartPreviewRequest) -> Dict[str, Any]:
     the actual cause (a bare 500 strips CORS headers and the browser
     misreports it as a CORS error).
     """
+    # Meter anonymous callers; signed-in users fall through to their plan quota.
+    enforce_anon_compute_quota(request, authorization, x_dev_user)
     import traceback
 
     # ── Validate graph ────────────────────────────────────────────────────
@@ -1942,13 +1956,16 @@ class SweepResult(BaseModel):
 @router.post("/sweep")
 def param_sweep(
     req: SweepRequest,
+    request:       Request,
     x_dev_user:    Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """
     Grid-search over discrete parameter values. Returns a ranked results table.
-    All combinations of param_ranges.values are tried; max 200 combinations.
+    All combinations of param_ranges.values are tried; capped at MAX_SWEEP_COMBOS.
     """
+    # Meter anonymous callers; signed-in users fall through to their plan quota.
+    enforce_anon_compute_quota(request, authorization, x_dev_user)
     import itertools
     from backend.engine.core.data_loader import load_mt5
     from backend.api import store
@@ -1970,8 +1987,16 @@ def param_sweep(
     keys    = [(r.node_id, r.param_key) for r in req.param_ranges]
     values  = [r.values for r in req.param_ranges]
     combos  = list(itertools.product(*values))
-    if len(combos) > 200:
-        raise HTTPException(400, f"Too many combinations ({len(combos)}). Max 200 — reduce param ranges.")
+    # Each combination costs ~2s of engine time (measured against production:
+    # 12 combos ≈ 25s). The Vercel proxy in front of this aborts at 60s, so a
+    # 200-combo grid would burn ~7 minutes of CPU producing a result nobody
+    # can receive. Cap at what the stack can actually deliver.
+    if len(combos) > MAX_SWEEP_COMBOS:
+        raise HTTPException(
+            400,
+            f"Too many combinations ({len(combos)}). Max {MAX_SWEEP_COMBOS} — "
+            "reduce the number of values or sweep fewer parameters at once.",
+        )
 
     results = []
     for combo in combos:
@@ -2043,6 +2068,7 @@ class WalkForwardRequest(BaseModel):
 @router.post("/walk-forward")
 def walk_forward(
     req: WalkForwardRequest,
+    request:       Request,
     x_dev_user:    Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
@@ -2051,6 +2077,8 @@ def walk_forward(
     runs a backtest on the out-of-sample portion. Returns per-window metrics
     and an aggregate OOS equity curve.
     """
+    # Meter anonymous callers; signed-in users fall through to their plan quota.
+    enforce_anon_compute_quota(request, authorization, x_dev_user)
     from backend.engine.core.data_loader import load_mt5
     from backend.api import store
 
@@ -2144,6 +2172,7 @@ class MonteCarloRequest(BaseModel):
 @router.post("/monte-carlo")
 def monte_carlo(
     req: MonteCarloRequest,
+    request:       Request,
     x_dev_user:    Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
@@ -2151,6 +2180,8 @@ def monte_carlo(
     Monte Carlo simulation: shuffle the detected trade PnL sequence N times
     and compute equity curve percentile bands (p5, p25, p50, p75, p95).
     """
+    # Meter anonymous callers; signed-in users fall through to their plan quota.
+    enforce_anon_compute_quota(request, authorization, x_dev_user)
     import numpy as np
     from backend.engine.core.data_loader import load_mt5
     from backend.api import store
@@ -2234,10 +2265,13 @@ def monte_carlo(
 @router.post("/backtest", response_model=BacktestResponse)
 def run_v2_backtest(
     req: GraphBacktestV2Request,
+    request:       Request,
     db:  Session = Depends(get_db),
     x_dev_user:    Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
+    # Meter anonymous callers; signed-in users fall through to their plan quota.
+    enforce_anon_compute_quota(request, authorization, x_dev_user)
     try:
         graph = validate_graph(req.graph)
     except ValueError as e:
