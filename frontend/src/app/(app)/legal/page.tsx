@@ -39,11 +39,11 @@ export default function LegalPage() {
       </Section>
 
       <Section title="Data deletion">
-        <p>To delete your account and all associated data, email us at <a href="mailto:support@edgekit.app" className="text-money hover:underline">support@edgekit.app</a> with the subject line "Delete my account". We'll process it within 7 business days.</p>
+        <p>To delete your account and all associated data, email us at <a href="mailto:support@edgekit.uk" className="text-money hover:underline">support@edgekit.uk</a> with the subject line "Delete my account". We'll process it within 7 business days.</p>
       </Section>
 
       <Section title="Contact">
-        <p>Questions, concerns, or DMCA notices: <a href="mailto:support@edgekit.app" className="text-money hover:underline">support@edgekit.app</a></p>
+        <p>Questions, concerns, or DMCA notices: <a href="mailto:support@edgekit.uk" className="text-money hover:underline">support@edgekit.uk</a></p>
         <p className="mt-2 text-muted text-[12px]">Last updated: May 2026</p>
       </Section>
     </div>

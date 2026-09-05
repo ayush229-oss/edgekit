@@ -108,7 +108,7 @@ const FAQ = [
   },
   {
     q: "Who is behind Edgekit?",
-    a: "Edgekit is operated by Satyasakshi and built hands-on by a small team for forex and prop-firm traders. You can reach us any time at support@edgekit.app — real humans read it.",
+    a: "Edgekit is operated by Satyasakshi and built hands-on by a small team for forex and prop-firm traders. You can reach us any time at support@edgekit.uk — real humans read it.",
   },
   {
     q: "Is this investment advice?",
@@ -187,7 +187,7 @@ export default async function LandingPage() {
           {[
             { v: "5 min",   l: "Idea to first backtest" },
             { v: "M1 → D1", l: "Every timeframe" },
-            { v: "2 sec",   l: "Average backtest time" },
+            { v: "Seconds", l: "Per backtest, not hours" },
           ].map(({ v, l }) => (
             <div key={l}>
               <div className="text-[22px] font-bold text-ink num">{v}</div>
@@ -296,7 +296,7 @@ export default async function LandingPage() {
         <section id="strategies" className="max-w-7xl mx-auto px-6 py-24">
           <p className="text-[11px] uppercase tracking-[0.25em] text-money mb-4 font-semibold text-center">Starting points</p>
           <h2 className="text-[32px] sm:text-display-3 font-semibold tracking-tight text-ink text-center mb-4">
-            {strategies.length}+ systematic strategies — ready to backtest.
+            {strategies.length} systematic strategies — ready to backtest.
           </h2>
           <p className="text-center text-[15px] text-muted mb-12 max-w-xl mx-auto">
             Not signals. Not tips. Full rule-based systems with entry, filter, stop loss,
@@ -373,8 +373,8 @@ export default async function LandingPage() {
           </div>
           <p className="text-center text-[13px] text-muted mt-10">
             Something else on your mind?{" "}
-            <a href="mailto:support@edgekit.app" className="text-money hover:underline font-medium">
-              support@edgekit.app
+            <a href="mailto:support@edgekit.uk" className="text-money hover:underline font-medium">
+              support@edgekit.uk
             </a>{" "}
             — we answer.
           </p>
@@ -420,7 +420,7 @@ export default async function LandingPage() {
             <div className="flex items-center gap-5 flex-wrap justify-center">
               <span>© {new Date().getFullYear()}</span>
               <span className="italic">For research only — not investment advice.</span>
-              <a href="mailto:support@edgekit.app" className="hover:text-ink transition-colors">support@edgekit.app</a>
+              <a href="mailto:support@edgekit.uk" className="hover:text-ink transition-colors">support@edgekit.uk</a>
               <Link href="/legal" className="hover:text-ink transition-colors">Legal</Link>
               <Link href="/waitlist" className="hover:text-ink transition-colors">Get access</Link>
             </div>

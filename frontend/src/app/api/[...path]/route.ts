@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { sanitizeBaseUrl, sanitizeHeaderValue } from "@/lib/sanitize-url";
 
-// Vercel env values can carry a BOM/zero-width prefix — strip non-printables
-// or `new URL()` inside fetch() rejects the URL (502 on every proxied call).
-const BACKEND_URL = (
-  process.env.NEXT_PUBLIC_API_URL ||
-  (process.env.VERCEL ? "http://165.232.178.128:8765" : "http://127.0.0.1:8765")
-).replace(/[^\x20-\x7E]/g, "").trim();
+// Vercel env values arrive decorated — BOM prefixes, shell quotes, Markdown
+// link wrappers, trailing slashes — and `new URL()` inside fetch() then rejects
+// them, 502-ing every proxied call. sanitizeBaseUrl strips all of that and
+// falls back to the default when the value can't be salvaged.
+const BACKEND_URL = sanitizeBaseUrl(
+  process.env.NEXT_PUBLIC_API_URL,
+  process.env.VERCEL ? "https://edgekit-v2.onrender.com" : "http://127.0.0.1:8765",
+);
 
-// Only forward headers that the VPS backend actually needs.
+// Only forward headers that the backend actually needs.
 // NB: accept-encoding is deliberately NOT forwarded. If the backend gzips the
 // response, fetch() auto-decompresses it when we call .text(), but the upstream
 // content-encoding/content-length headers then describe the compressed bytes —
@@ -38,7 +41,7 @@ async function proxy(req: NextRequest, { params }: { params: { path: string[] } 
       const val = req.headers.get(key);
       if (val) reqHeaders[key] = val;
     }
-    const apiKey = process.env.EDGEKIT_API_KEY?.replace(/[^\x20-\x7E]/g, "");
+    const apiKey = sanitizeHeaderValue(process.env.EDGEKIT_API_KEY);
     if (apiKey) reqHeaders["x-api-key"] = apiKey;
 
     const hasBody = !["GET", "HEAD"].includes(req.method);
