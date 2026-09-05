@@ -28,6 +28,16 @@ const STRIP_RESPONSE_HEADERS = new Set([
 // the VPS deploy webhooks (git pull + service restart) through /api/internal/*.
 const BLOCKED_PREFIXES = ["/internal/"];
 
+// Vercel kills a function at 10s by default, but the backend runs on Render's
+// free tier, which suspends after ~15 min idle and takes ~23s to wake. The
+// default therefore guarantees an error for the first visitor after any quiet
+// spell. 60s is the Hobby-plan ceiling; raise it if the plan changes.
+export const maxDuration = 60;
+
+// Abort just under maxDuration so a hung backend produces a JSON 504 we control
+// rather than Vercel's opaque function-timeout page.
+const UPSTREAM_TIMEOUT_MS = 55_000;
+
 async function proxy(req: NextRequest, { params }: { params: { path: string[] } }) {
   try {
     const path = "/" + params.path.join("/");
@@ -49,6 +59,7 @@ async function proxy(req: NextRequest, { params }: { params: { path: string[] } 
       method: req.method,
       headers: reqHeaders,
       body: hasBody ? await req.text() : undefined,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
 
     const resHeaders: Record<string, string> = {};
@@ -62,6 +73,14 @@ async function proxy(req: NextRequest, { params }: { params: { path: string[] } 
     });
   } catch (e) {
     console.error("[proxy]", e);
+    // AbortSignal.timeout rejects with a TimeoutError. Report it as 504 with a
+    // message the UI can show verbatim, rather than a generic 502.
+    if (e instanceof Error && e.name === "TimeoutError") {
+      return NextResponse.json(
+        { error: "backend timeout", detail: "The backend did not respond in time. It may be waking from idle — try again in a moment." },
+        { status: 504 },
+      );
+    }
     return NextResponse.json({ error: "proxy error", detail: String(e) }, { status: 502 });
   }
 }

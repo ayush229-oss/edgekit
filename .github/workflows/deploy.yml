@@ -11,7 +11,10 @@ on:
 #     Until then that job no-ops. The VPS deploy stays as a warm fallback.
 #     (Alternative: install the Railway GitHub App on this repo for native
 #      push-deploys; then you don't need the token job. Use one or the other.)
-#   • Frontend → Vercel project `edgekit`, git-connected; auto-deploys on push.
+#   • Frontend → Vercel project `edgekit`. NOT git-connected: pushing to main does
+#     *not* redeploy it. Every production release so far has been a manual
+#     `vercel --prod` from a working tree, which also means a deploy ships any
+#     uncommitted local edits. Check `git status` before deploying.
 
 jobs:
   test-backend:
