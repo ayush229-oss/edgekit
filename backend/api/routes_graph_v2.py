@@ -1031,8 +1031,13 @@ def _normalize_api_error(provider: str, msg: str) -> HTTPException:
     low = msg.lower()
     if any(x in low for x in ("invalid api key", "api_key_invalid", "unauthorized", "401", "incorrect api key")):
         return HTTPException(400, f"The {provider} API key is invalid. Update it on the Resources page.")
-    if any(x in low for x in ("quota", "rate", "429", "resource_exhausted", "too many requests")):
-        return HTTPException(429, f"{provider} rate limit hit. Wait a minute and try again.")
+    # NB: match "rate limit", never a bare "rate". Gemini's endpoint is
+    # `generateContent`, so "gene-RATE" made almost every provider error --
+    # bad model name, API not enabled, billing misconfigured -- masquerade as a
+    # rate limit. That hid the real cause and sent debugging the wrong way.
+    if any(x in low for x in ("quota", "rate limit", "rate_limit", "ratelimit",
+                              "429", "resource_exhausted", "too many requests")):
+        return HTTPException(429, f"{provider} rate limit or quota hit. Wait a minute and try again.")
     if any(x in low for x in ("permission", "403", "permission_denied")):
         return HTTPException(403, f"The {provider} API key lacks permission for this model.")
     return HTTPException(502, f"AI provider error ({provider}): {msg[:300]}")
